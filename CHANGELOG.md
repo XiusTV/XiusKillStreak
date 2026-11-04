@@ -11,3 +11,6 @@ All notable changes to Xius Kill Streak are documented here.
 - Movable banner and counter. The counter can be resized from the corner while unlocked.
 - Options to enable streaks, play announcer sounds, and unlock the frames.
 - `/xks` slash commands, including a test for each tier.
+
+### Changed
+- Removed unused Blood Crow font styles. The banner still uses Blood Crow Regular and CF Night of the Damned.
