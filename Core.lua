@@ -12,32 +12,43 @@
     a secret value.
 ]]
 
-XiusKillStreak = XiusKillStreak or {}
+local _, ns = ...
 
-XiusKillStreak.streak = 0
-XiusKillStreak.firedTier = 0
-XiusKillStreak.lastKillAt = nil
-XiusKillStreak.loaded = false
-XiusKillStreak.recentKills = {}
-XiusKillStreak.aliveWatch = {}
-XiusKillStreak.targetAliveAt = nil
-XiusKillStreak.targetName = nil
-XiusKillStreak.targetGUID = nil
-XiusKillStreak.inCombat = false
-XiusKillStreak.lastCombatAt = 0
-XiusKillStreak.lastQuestTurnin = 0
-XiusKillStreak.lastXPAt = 0
-XiusKillStreak.lastCountedAt = 0
-XiusKillStreak.lastCountedName = nil
-XiusKillStreak.pendingNameless = nil
-XiusKillStreak.soundHandle = nil
+local XiusCore = _G.XiusCore or _G.XiusUI or _G.XiusCoreSettingsLib
+if not XiusCore and C_AddOns and C_AddOns.IsAddOnLoaded then
+    local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, "XiusCore")
+    XiusCore = ok and loaded and true or false
+end
+if not XiusCore and IsAddOnLoaded then
+    local ok, loaded = pcall(IsAddOnLoaded, "XiusCore")
+    XiusCore = ok and loaded and true or false
+end
+if not XiusCore then
+    return
+end
+
+ns.streak = 0
+ns.firedTier = 0
+ns.lastKillAt = nil
+ns.loaded = false
+ns.recentKills = {}
+ns.targetAliveAt = nil
+ns.targetName = nil
+ns.targetGUID = nil
+ns.inCombat = false
+ns.lastCombatAt = 0
+ns.lastQuestTurnin = 0
+ns.lastXPAt = 0
+ns.lastCountedAt = 0
+ns.lastCountedName = nil
+ns.pendingNameless = nil
+ns.soundHandle = nil
 
 local pcall = pcall
 local type = type
 local tostring = tostring
 local tonumber = tonumber
 local print = print
-local GetTime = GetTime
 local string_find = string.find
 local string_format = string.format
 local string_gsub = string.gsub
@@ -48,12 +59,11 @@ local string_sub = string.sub
 local string_upper = string.upper
 local table_remove = table.remove
 
-local issecretvalue = _G.issecretvalue
-local canaccessvalue = _G.canaccessvalue
-
 local CORRELATE_WINDOW = 0.35
 local GUID_WINDOW = 5.0
 local SOUND_CHANNELS = { "Master", "Dialog", "SFX" }
+local SOURCE_KEYS = { "XP", "GENERIC", "KB", "HONOR", "SLAIN", "PARTYKILL", "TARGET" }
+local recordPool = {}
 
 local RESTRICTED_EVENTS = {
     COMBAT_LOG_EVENT = true,
@@ -69,33 +79,57 @@ eventFrame.tickerActive = false
 
 local StartTicker
 
-local function IsTrue(value)
-    return value == true
+local function IsSecret(value)
+    return ns.IsSecret(value)
 end
 
-local function IsSecret(value)
-    if issecretvalue then
-        local ok, secret = pcall(issecretvalue, value)
-        if not ok then
-            return true
-        end
-        local compared, plain = pcall(IsTrue, secret)
-        if not compared or plain then
-            return true
-        end
+local function Now()
+    return ns.Now()
+end
+
+local function PlainStamp(value)
+    return ns.PlainNumber(value)
+end
+
+local function ClearSources(sources)
+    for i = 1, #SOURCE_KEYS do
+        sources[SOURCE_KEYS[i]] = nil
     end
-    if canaccessvalue then
-        local ok, accessible = pcall(canaccessvalue, value)
-        if not ok then
-            return true
-        end
-        local compared, plain = pcall(IsTrue, accessible)
-        if not compared or not plain then
-            return true
-        end
+end
+
+local function AcquireRecord()
+    local rec = recordPool[#recordPool]
+    if rec then
+        recordPool[#recordPool] = nil
+        return rec
     end
-    local compared = pcall(IsTrue, value)
-    return not compared
+    return { sources = {} }
+end
+
+local function ReleaseRecord(rec)
+    if type(rec) ~= "table" then
+        return
+    end
+    rec.at = nil
+    rec.name = nil
+    rec.guid = nil
+    if type(rec.sources) ~= "table" then
+        rec.sources = {}
+    else
+        ClearSources(rec.sources)
+    end
+    recordPool[#recordPool + 1] = rec
+end
+
+local function WipeRecords(list)
+    for i = #list, 1, -1 do
+        ReleaseRecord(list[i])
+        list[i] = nil
+    end
+end
+
+local function TrackingEnabled()
+    return XiusKillStreakDB and XiusKillStreakDB.enabled and true or false
 end
 
 local function PublicString(value)
@@ -249,11 +283,11 @@ local function EnsurePatterns()
     end
 end
 
-function XiusKillStreak:Print(text)
+function ns:Print(text)
     print("Xius Kill Streak: " .. tostring(text))
 end
 
-function XiusKillStreak:InitDB()
+function ns:InitDB()
     if type(XiusKillStreakDB) ~= "table" then
         XiusKillStreakDB = {}
     end
@@ -269,8 +303,8 @@ function XiusKillStreak:InitDB()
     end
 end
 
-function XiusKillStreak:CurrentWindow()
-    local config = XiusKillStreak_Config
+function ns:CurrentWindow()
+    local config = ns.tiers
     local index = self.firedTier
     if index and index > 0 and config[index] and config[index].countdown then
         return config[index].countdown
@@ -281,12 +315,11 @@ function XiusKillStreak:CurrentWindow()
     return 25
 end
 
-function XiusKillStreak:ResetStreak()
+function ns:ResetStreak()
     self.streak = 0
     self.firedTier = 0
     self.lastKillAt = nil
-    self.recentKills = {}
-    self.aliveWatch = {}
+    WipeRecords(self.recentKills)
     self.targetAliveAt = nil
     self.targetName = nil
     self.targetGUID = nil
@@ -297,14 +330,14 @@ function XiusKillStreak:ResetStreak()
     end
 end
 
-function XiusKillStreak:StopSound()
+function ns:StopSound()
     if self.soundHandle and type(self.soundHandle) == "number" and StopSound then
         pcall(StopSound, self.soundHandle, 0)
     end
     self.soundHandle = nil
 end
 
-function XiusKillStreak:NameIsSelf(name)
+function ns:NameIsSelf(name)
     name = ShortName(name)
     if not name then
         return false
@@ -316,7 +349,7 @@ function XiusKillStreak:NameIsSelf(name)
     return mine ~= nil and name == mine
 end
 
-function XiusKillStreak:GuidIsSelf(guid)
+function ns:GuidIsSelf(guid)
     guid = PublicString(guid)
     if not guid then
         return false
@@ -328,7 +361,11 @@ function XiusKillStreak:GuidIsSelf(guid)
     return myGuid ~= nil and guid == myGuid
 end
 
-function XiusKillStreak:IsCombatActive(now)
+function ns:IsCombatActive(now)
+    now = PlainStamp(now)
+    if not now then
+        return self.inCombat and true or false
+    end
     if self.inCombat then
         return true
     end
@@ -337,27 +374,34 @@ function XiusKillStreak:IsCombatActive(now)
         self.lastCombatAt = now
         return true
     end
-    if self.lastCombatAt and (now - self.lastCombatAt) <= 2.5 then
+    local last = PlainStamp(self.lastCombatAt)
+    if last and (now - last) <= 2.5 then
         return true
     end
     return false
 end
 
-function XiusKillStreak:PruneRecent(now)
+function ns:PruneRecent(now)
+    now = PlainStamp(now)
+    if not now then
+        return
+    end
     local recent = self.recentKills
     for i = #recent, 1, -1 do
         local rec = recent[i]
-        if type(rec) ~= "table" or type(rec.at) ~= "number" or (now - rec.at) > GUID_WINDOW then
+        local at = type(rec) == "table" and PlainStamp(rec.at) or nil
+        if not at or (now - at) > GUID_WINDOW then
+            ReleaseRecord(rec)
             table_remove(recent, i)
         end
     end
 end
 
-function XiusKillStreak:QueueNameless(source)
+function ns:QueueNameless(source)
     self:CreditKill(nil, nil, source or "GENERIC")
 end
 
-function XiusKillStreak:FlushPending()
+function ns:FlushPending()
     local pending = self.pendingNameless
     if type(pending) ~= "table" then
         self.pendingNameless = nil
@@ -373,7 +417,7 @@ function XiusKillStreak:FlushPending()
     end
 end
 
-function XiusKillStreak:CreditKill(name, guid, source, happened)
+function ns:CreditKill(name, guid, source, happened)
     if not XiusKillStreakDB or not XiusKillStreakDB.enabled then
         return
     end
@@ -381,11 +425,15 @@ function XiusKillStreak:CreditKill(name, guid, source, happened)
         return
     end
 
-    local now = GetTime()
-    if type(happened) ~= "number" or happened > now or (now - happened) > 3 then
+    local now = Now()
+    if not now then
+        return
+    end
+    if PlainStamp(happened) == nil or happened > now or (now - happened) > 3 then
         happened = now
     end
-    if self.lastKillAt and happened < self.lastKillAt then
+    local previousKill = PlainStamp(self.lastKillAt)
+    if previousKill and happened < previousKill then
         happened = now
     end
 
@@ -411,7 +459,8 @@ function XiusKillStreak:CreditKill(name, guid, source, happened)
     if guid then
         for i = 1, #recent do
             local rec = recent[i]
-            if rec.guid == guid and (now - rec.at) < GUID_WINDOW then
+            local seenAt = PlainStamp(rec.at)
+            if rec.guid == guid and seenAt and (now - seenAt) < GUID_WINDOW then
                 if name and not rec.name then
                     rec.name = name
                 end
@@ -429,7 +478,8 @@ function XiusKillStreak:CreditKill(name, guid, source, happened)
     if source ~= "GENERIC" then
         for i = 1, #recent do
             local rec = recent[i]
-            if (now - rec.at) <= CORRELATE_WINDOW and rec.sources and not rec.sources[source] then
+            local seenAt = PlainStamp(rec.at)
+            if seenAt and (now - seenAt) <= CORRELATE_WINDOW and rec.sources and not rec.sources[source] then
                 local nameMatch = (not rec.name) or (not name) or (rec.name == name)
                 local guidMatch = (not rec.guid) or (not guid) or (rec.guid == guid)
                 if nameMatch and guidMatch then
@@ -449,12 +499,12 @@ function XiusKillStreak:CreditKill(name, guid, source, happened)
         end
     end
 
-    recent[#recent + 1] = {
-        at = now,
-        name = name,
-        guid = guid,
-        sources = { [source] = true },
-    }
+    local rec = AcquireRecord()
+    rec.at = now
+    rec.name = name
+    rec.guid = guid
+    rec.sources[source] = true
+    recent[#recent + 1] = rec
 
     if fromXP then
         self.lastXPAt = now
@@ -463,7 +513,7 @@ function XiusKillStreak:CreditKill(name, guid, source, happened)
     self.lastCountedName = name
 
     local window = self:CurrentWindow()
-    if self.streak > 0 and self.lastKillAt and (happened - self.lastKillAt) <= window then
+    if self.streak > 0 and previousKill and (happened - previousKill) <= window then
         self.streak = self.streak + 1
     else
         self.streak = 1
@@ -497,7 +547,7 @@ local function TryPlaySoundFile(self, file, channel)
     return false
 end
 
-function XiusKillStreak:PlaySound(path, force)
+function ns:PlaySound(path, force)
     if not path or path == "" or not PlaySoundFile then
         return
     end
@@ -526,7 +576,7 @@ function XiusKillStreak:PlaySound(path, force)
     end
 end
 
-function XiusKillStreak:AnnounceTier(tier, streakCount)
+function ns:AnnounceTier(tier, streakCount)
     if not tier then
         return
     end
@@ -536,8 +586,8 @@ function XiusKillStreak:AnnounceTier(tier, streakCount)
     self:PlaySound(tier.sound, false)
 end
 
-function XiusKillStreak:AnnounceIfNeeded()
-    local config = XiusKillStreak_Config
+function ns:AnnounceIfNeeded()
+    local config = ns.tiers
     local reached = self.firedTier or 0
     local index = reached
     local i = reached + 1
@@ -555,11 +605,13 @@ function XiusKillStreak:AnnounceIfNeeded()
     end
 end
 
-function XiusKillStreak:CheckExpiry()
-    if not self.streak or self.streak <= 0 or not self.lastKillAt then
+function ns:CheckExpiry()
+    local last = PlainStamp(self.lastKillAt)
+    if not self.streak or self.streak <= 0 or not last then
         return
     end
-    if (GetTime() - self.lastKillAt) > self:CurrentWindow() then
+    local now = Now()
+    if now and (now - last) > self:CurrentWindow() then
         self:ResetStreak()
     end
 end
@@ -573,7 +625,7 @@ local function UnitIdentity(unit)
     return ShortName(PlainString(UnitName, unit)), PlainString(UnitGUID, unit)
 end
 
-function XiusKillStreak:OnCombatText(eventType, name)
+function ns:OnCombatText(eventType, name)
     if not self.loaded then
         return
     end
@@ -628,13 +680,17 @@ local function IsQuestXP(text)
     return string_find(text, "^You gain ") and true or false
 end
 
-function XiusKillStreak:OnXPGain(message)
+function ns:OnXPGain(message)
     if not self.loaded then
         return
     end
 
-    local now = GetTime()
-    local recentQuest = self.lastQuestTurnin and (now - self.lastQuestTurnin) < 1.5
+    local now = Now()
+    if not now then
+        return
+    end
+    local turnin = PlainStamp(self.lastQuestTurnin)
+    local recentQuest = turnin and (now - turnin) < 1.5
 
     -- In Modern WoW / Forever, XP messages from mob deaths in combat may be marked secret
     -- because they embed the secret enemy unit name. Quest/discovery XP has no enemy name.
@@ -667,7 +723,7 @@ function XiusKillStreak:OnXPGain(message)
     end
 end
 
-function XiusKillStreak:OnHonorGain(message)
+function ns:OnHonorGain(message)
     if not self.loaded then
         return
     end
@@ -694,7 +750,7 @@ function XiusKillStreak:OnHonorGain(message)
     end
 end
 
-function XiusKillStreak:OnHostileDeathChat(message)
+function ns:OnHostileDeathChat(message)
     if not self.loaded then
         return
     end
@@ -713,7 +769,7 @@ function XiusKillStreak:OnHostileDeathChat(message)
     end
 end
 
-function XiusKillStreak:OnPartyKill(attackerGUID, targetGUID)
+function ns:OnPartyKill(attackerGUID, targetGUID)
     if not self.loaded then
         return
     end
@@ -740,7 +796,7 @@ function XiusKillStreak:OnPartyKill(attackerGUID, targetGUID)
     end
 end
 
-function XiusKillStreak:WatchTarget(fromTargetChange)
+function ns:WatchTarget(fromTargetChange)
     if PlainBool(UnitExists, "target") ~= true then
         self.targetAliveAt = nil
         self.targetName = nil
@@ -754,7 +810,10 @@ function XiusKillStreak:WatchTarget(fromTargetChange)
         return
     end
 
-    local now = GetTime()
+    local now = Now()
+    if not now then
+        return
+    end
     local dead = PlainBool(UnitIsDead, "target")
     local ghost = PlainBool(UnitIsDeadOrGhost, "target")
     if dead == nil and ghost == nil then
@@ -765,6 +824,12 @@ function XiusKillStreak:WatchTarget(fromTargetChange)
     end
 
     local isDead = (dead == true) or (ghost == true)
+    if not isDead and self.targetAliveAt and self.targetGUID then
+        local sameGuid = PlainString(UnitGUID, "target")
+        if sameGuid and sameGuid == self.targetGUID then
+            return
+        end
+    end
     local name, guid = UnitIdentity("target")
 
     if not isDead then
@@ -778,6 +843,9 @@ function XiusKillStreak:WatchTarget(fromTargetChange)
             self.targetAliveAt = nil
             self.targetName = nil
             self.targetGUID = nil
+            return
+        end
+        if self.targetAliveAt and ((guid and guid == self.targetGUID) or (not guid and name and name == self.targetName)) then
             return
         end
         self.targetAliveAt = now
@@ -811,17 +879,17 @@ function XiusKillStreak:WatchTarget(fromTargetChange)
     if savedGUID and guid and savedGUID ~= guid then
         return
     end
-    if type(seen) == "number" and self:IsCombatActive(now) then
+    if PlainStamp(seen) and self:IsCombatActive(now) then
         self:CreditKill(name or savedName, guid or savedGUID, "TARGET")
     end
 end
 
-function XiusKillStreak:Test(index)
+function ns:Test(index)
     if not self.banner then
         self:Print("Still loading. Try again in a moment.")
         return
     end
-    local tier = XiusKillStreak_Config[index]
+    local tier = ns.tiers[index]
     if not tier then
         self:Print("Use /xks test for Toasty, or /xks test 1 through 10.")
         return
@@ -832,9 +900,25 @@ function XiusKillStreak:Test(index)
     self:PlaySound(tier.sound, true)
 end
 
-function XiusKillStreak:HandleSlash(message)
+function ns:HandleSlash(message)
     local text = string_lower(Trim(SafeText(message) or ""))
     if text == "" or text == "options" or text == "config" then
+        local Lib = _G.XiusCoreSettingsLib
+        if not self.loaded then
+            self:Print("Still loading. Try /xks again in a moment.")
+            return
+        end
+        if self.InLockdown and self.InLockdown() then
+            self:Print("Cannot open the Settings window in combat. Use /xks unlock, /xks lock, /xks sound, or /xks reset.")
+            return
+        end
+        if not self.optionsReady and self.SetupOptions then
+            self:SetupOptions()
+        end
+        if Lib and Lib.OpenModule then
+            Lib:OpenModule("KillStreak")
+            return
+        end
         self:OpenOptions()
         return
     end
@@ -882,10 +966,10 @@ function XiusKillStreak:HandleSlash(message)
     local tierText = string_match(text, "^test%s+(%d+)$")
     if tierText then
         local tier = tonumber(tierText)
-        if tier and tier >= 1 and tier <= #XiusKillStreak_Config then
+        if tier and tier >= 1 and tier <= #ns.tiers then
             self:Test(tier)
         else
-            self:Print("Pick a tier from 1 to " .. tostring(#XiusKillStreak_Config) .. ".")
+            self:Print("Pick a tier from 1 to " .. tostring(#ns.tiers) .. ".")
         end
         return
     end
@@ -893,7 +977,7 @@ function XiusKillStreak:HandleSlash(message)
     self:Print("Commands: /xks (options), /xks test [1-10], /xks reset, /xks unlock, /xks lock, /xks resetpos, /xks sound, /xks on, /xks off.")
 end
 
-function XiusKillStreak:OnLoaded()
+function ns:OnLoaded()
     if self.loaded then
         return
     end
@@ -902,13 +986,12 @@ function XiusKillStreak:OnLoaded()
     self.streak = 0
     self.firedTier = 0
     self.lastKillAt = nil
-    self.recentKills = {}
-    self.aliveWatch = {}
+    WipeRecords(self.recentKills)
     self.targetAliveAt = nil
     self.targetName = nil
     self.targetGUID = nil
     self.inCombat = PlainBool(UnitAffectingCombat, "player") == true
-    self.lastCombatAt = self.inCombat and GetTime() or 0
+    self.lastCombatAt = self.inCombat and (Now() or 0) or 0
     self.lastQuestTurnin = 0
     self.lastXPAt = 0
     self.lastCountedAt = 0
@@ -964,8 +1047,9 @@ local function RegisterUnitSafe(frame, eventName, unit)
 end
 
 RegisterSafe(eventFrame, "ADDON_LOADED")
+RegisterSafe(eventFrame, "PLAYER_LOGIN")
 
-function XiusKillStreak:RegisterTrackingEvents()
+function ns:RegisterTrackingEvents()
     if self.trackingEventsRegistered then
         return
     end
@@ -987,8 +1071,17 @@ function XiusKillStreak:RegisterTrackingEvents()
 end
 
 local function TickerOnUpdate(self, elapsed)
-    if not XiusKillStreak.loaded then
+    if not ns.loaded or not TrackingEnabled() then
+        self.tickerActive = false
+        self:SetScript("OnUpdate", nil)
         return
+    end
+    elapsed = ns.PlainNumber(elapsed)
+    if not elapsed or elapsed < 0 then
+        return
+    end
+    if elapsed > 1 then
+        elapsed = 1
     end
     self.accum = self.accum + elapsed
     if self.accum < 0.2 then
@@ -996,42 +1089,52 @@ local function TickerOnUpdate(self, elapsed)
     end
     self.accum = 0
 
-    local now = GetTime()
-    local hasStreak = XiusKillStreak.streak and XiusKillStreak.streak > 0
-    local hasRecent = #XiusKillStreak.recentKills > 0
-    local hasPending = XiusKillStreak.pendingNameless ~= nil
-    local combatActive = XiusKillStreak:IsCombatActive(now)
+    local now = Now()
+    if not now then
+        return
+    end
+    local hasStreak = ns.streak and ns.streak > 0
+    local hasRecent = #ns.recentKills > 0
+    local hasPending = ns.pendingNameless ~= nil
+    local combatActive = ns:IsCombatActive(now)
 
     if hasPending then
-        XiusKillStreak:FlushPending()
+        ns:FlushPending()
     end
     if hasStreak then
         if PlainBool(UnitIsDeadOrGhost, "player") == true then
-            XiusKillStreak:ResetStreak()
+            ns:ResetStreak()
             hasStreak = false
         else
-            XiusKillStreak:CheckExpiry()
-            hasStreak = XiusKillStreak.streak and XiusKillStreak.streak > 0
+            ns:CheckExpiry()
+            hasStreak = ns.streak and ns.streak > 0
         end
     end
     if hasRecent then
-        XiusKillStreak:PruneRecent(now)
-        hasRecent = #XiusKillStreak.recentKills > 0
+        ns:PruneRecent(now)
+        hasRecent = #ns.recentKills > 0
     end
-    if combatActive or XiusKillStreak.targetAliveAt then
-        XiusKillStreak:WatchTarget(false)
+    if combatActive or ns.targetAliveAt then
+        ns:WatchTarget(false)
     end
     if hasStreak or (XiusKillStreakDB and XiusKillStreakDB.unlocked) then
-        XiusKillStreak:UpdateCounter()
+        ns:UpdateCounter()
     end
 
-    if not hasStreak and not hasRecent and XiusKillStreak.pendingNameless == nil and not combatActive and not XiusKillStreak.targetAliveAt then
+    if not hasStreak and not hasRecent and ns.pendingNameless == nil and not combatActive and not ns.targetAliveAt then
         self.tickerActive = false
         self:SetScript("OnUpdate", nil)
     end
 end
 
 StartTicker = function()
+    if not TrackingEnabled() then
+        if eventFrame.tickerActive then
+            eventFrame.tickerActive = false
+            eventFrame:SetScript("OnUpdate", nil)
+        end
+        return
+    end
     if not eventFrame.tickerActive then
         eventFrame.tickerActive = true
         eventFrame.accum = 0
@@ -1041,53 +1144,76 @@ end
 
 eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
     if event == "ADDON_LOADED" then
-        if PublicString(arg1) == "XiusKillStreak" then
-            XiusKillStreak:OnLoaded()
+        if PublicString(arg1) == ns.ADDON_NAME then
+            ns:OnLoaded()
         end
         return
     end
-    if not XiusKillStreak.loaded then
+    if event == "PLAYER_LOGIN" then
+        if not ns.loaded then
+            ns:OnLoaded()
+        else
+            ns:SetupOptions()
+        end
+        return
+    end
+    if not ns.loaded then
         return
     end
     if event == "PLAYER_DEAD" then
-        XiusKillStreak:ResetStreak()
+        ns:ResetStreak()
     elseif event == "PLAYER_ENTERING_WORLD" then
-        XiusKillStreak.playerName = ShortName(PlainString(UnitName, "player")) or XiusKillStreak.playerName
-        XiusKillStreak.playerGUID = PlainString(UnitGUID, "player") or XiusKillStreak.playerGUID
+        ns.playerName = ShortName(PlainString(UnitName, "player")) or ns.playerName
+        ns.playerGUID = PlainString(UnitGUID, "player") or ns.playerGUID
     elseif event == "COMBAT_TEXT_UPDATE" then
-        XiusKillStreak:OnCombatText(arg1, arg2)
+        ns:OnCombatText(arg1, arg2)
     elseif event == "CHAT_MSG_COMBAT_HOSTILE_DEATH" then
-        XiusKillStreak:OnHostileDeathChat(arg1)
+        ns:OnHostileDeathChat(arg1)
     elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
-        XiusKillStreak:OnXPGain(arg1)
+        ns:OnXPGain(arg1)
     elseif event == "CHAT_MSG_COMBAT_HONOR_GAIN" then
-        XiusKillStreak:OnHonorGain(arg1)
+        ns:OnHonorGain(arg1)
     elseif event == "PARTY_KILL" then
-        XiusKillStreak:OnPartyKill(arg1, arg2)
+        ns:OnPartyKill(arg1, arg2)
     elseif event == "QUEST_COMPLETE" or event == "QUEST_TURNED_IN" then
-        XiusKillStreak.lastQuestTurnin = GetTime()
+        local now = Now()
+        if now then
+            ns.lastQuestTurnin = now
+        end
     elseif event == "PLAYER_TARGET_CHANGED" then
-        XiusKillStreak.targetAliveAt = nil
-        XiusKillStreak.targetName = nil
-        XiusKillStreak.targetGUID = nil
-        XiusKillStreak:WatchTarget(true)
+        ns.targetAliveAt = nil
+        ns.targetName = nil
+        ns.targetGUID = nil
+        ns:WatchTarget(true)
     elseif event == "PLAYER_REGEN_DISABLED" then
-        XiusKillStreak.inCombat = true
-        XiusKillStreak.lastCombatAt = GetTime()
+        ns.inCombat = true
+        local now = Now()
+        if now then
+            ns.lastCombatAt = now
+        end
         StartTicker()
-        XiusKillStreak:WatchTarget(false)
+        ns:WatchTarget(false)
     elseif event == "PLAYER_REGEN_ENABLED" then
-        XiusKillStreak.inCombat = false
-        XiusKillStreak.lastCombatAt = GetTime()
+        ns.inCombat = false
+        local now = Now()
+        if now then
+            ns.lastCombatAt = now
+        end
+        if ns.FlushLayout then
+            ns:FlushLayout()
+        end
         StartTicker()
-        XiusKillStreak:WatchTarget(false)
+        ns:WatchTarget(false)
     elseif event == "PLAYER_ENTER_COMBAT" then
-        XiusKillStreak.lastCombatAt = GetTime()
+        local now = Now()
+        if now then
+            ns.lastCombatAt = now
+        end
         StartTicker()
-        XiusKillStreak:WatchTarget(false)
+        ns:WatchTarget(false)
     elseif event == "UNIT_HEALTH" then
         if not arg1 or PublicString(arg1) == "target" then
-            XiusKillStreak:WatchTarget(false)
+            ns:WatchTarget(false)
         end
     end
 end)
@@ -1095,5 +1221,5 @@ end)
 SLASH_XIUSKILLSTREAK1 = "/xks"
 SLASH_XIUSKILLSTREAK2 = "/xiuskillstreak"
 SlashCmdList.XIUSKILLSTREAK = function(message)
-    XiusKillStreak:HandleSlash(message)
+    ns:HandleSlash(message)
 end

@@ -6,3 +6,6 @@ ignore:
  - LICENSE
  - CHANGELOG.md
  - .pkgmeta
+
+required-dependencies:
+  - xius-core

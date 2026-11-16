@@ -1,306 +1,281 @@
 --[[
-    Options use the shared settings canvas on modern World of Warcraft
-    and World of Warcraft Forever. The vertical settings checkbox
-    initializer differs between these clients and must not be used.
+    Registers Kill Streak with the settings window from XiusCore.
+    This file does not build a window. XiusCore owns the chrome.
+    The page title is already "Kill Streak", so this page does not
+    repeat that name as a section header.
 ]]
 
-XiusKillStreak = XiusKillStreak or {}
+local _, ns = ...
 
-local pcall = pcall
-local CreateFrame = CreateFrame
+local SUBTITLE = "Tracks consecutive killing blows on mobs and enemy players with Unreal-style banners and sounds."
 
-local function PlayCheckSound(checked)
-    if not PlaySound or not SOUNDKIT then
+local TIP_ENABLE = "Count killing blows on mobs and enemy players. Turning off clears the current streak."
+local TIP_SOUND = "Play the announcer voice on each tier. Test Banner always plays sound."
+local TIP_UNLOCK = "Drag the banner or streak counter to move; drag the counter corner to resize."
+
+local TIER_SUMMARY = "First kill starts a 25s window; each tier below sets the timer to reach the next kill (/xks test | /xks unlock):"
+local TIER_LINES = table.concat({
+    "2: Double Kill (22s)  •  3: Triple Kill (18s)  •  5: Multi Kill (15s)",
+    "8: Mega Kill (12s)  •  12: Ultra Kill (10s)  •  16: Monster Kill (8s)",
+    "20: Godlike (6s)  •  25: Holy Shit (5s)  •  30: Finish Him (4s)  •  40: Toasty (3s)",
+}, "\n")
+local TIER_BLOCK = TIER_SUMMARY .. "\n" .. TIER_LINES
+
+local function LineCount(text)
+    local lines = 0
+    local start = 1
+    local len = string.len(text)
+    if len < 1 then
+        return 1
+    end
+    while start <= len do
+        local stop = string.find(text, "\n", start, true)
+        local chunkEnd = stop or (len + 1)
+        local chunk = chunkEnd - start
+        if chunk < 1 then
+            chunk = 1
+        end
+        lines = lines + math.ceil(chunk / 88)
+        if not stop then
+            break
+        end
+        start = stop + 1
+        if start > len then
+            break
+        end
+    end
+    if lines < 1 then
+        lines = 1
+    end
+    return lines
+end
+
+local function NoteFont(row)
+    local regions = { row:GetRegions() }
+    for i = 1, #regions do
+        local region = regions[i]
+        if region.GetText and region.GetStringHeight then
+            return region
+        end
+    end
+end
+
+local function FitNote(row, text)
+    if not row then
         return
     end
-    if checked and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
-        pcall(PlaySound, SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
-    elseif (not checked) and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF then
-        pcall(PlaySound, SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
+    local font = NoteFont(row)
+    local function Apply()
+        local height = 8 + (LineCount(text) * 15)
+        if font and font.GetStringHeight then
+            local measured = font:GetStringHeight()
+            if type(measured) == "number" and measured > 1 and (measured + 8) > height then
+                height = measured + 8
+            end
+        end
+        if height < 22 then
+            height = 22
+        end
+        row.rowHeight = height
+        row:SetHeight(height)
+    end
+    row.Reflow = Apply
+    Apply()
+end
+
+local function DB()
+    if type(XiusKillStreakDB) ~= "table" then
+        XiusKillStreakDB = {}
+    end
+    return XiusKillStreakDB
+end
+
+local function Flag(key)
+    return DB()[key] and true or false
+end
+
+local function SettingsLib()
+    return _G.XiusCoreSettingsLib
+end
+
+local function RefreshPage()
+    local Lib = SettingsLib()
+    if Lib and Lib.RefreshPage then
+        Lib:RefreshPage()
     end
 end
 
-local function SetCheckText(check, text)
-    local label = check.Text or check.text
-    if not label and check.GetName and check:GetName() then
-        label = _G[check:GetName() .. "Text"]
-    end
-    if not label or not label.SetText then
-        if not check.label then
-            check.label = check:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-            check.label:SetPoint("LEFT", check, "RIGHT", 4, 1)
-        end
-        label = check.label
-    end
-    label:SetText(text)
-    if check.SetHitRectInsets then
-        local width = (label.GetStringWidth and label:GetStringWidth()) or 160
-        if width < 140 then
-            width = 140
-        end
-        pcall(check.SetHitRectInsets, check, 0, -(width + 8), 0, 0)
-    end
-end
-
-local function MakeCheck(parent, name, text, tooltip)
-    local check
-    local ok, frame = pcall(CreateFrame, "CheckButton", name, parent, "InterfaceOptionsCheckButtonTemplate")
-    if ok and frame then
-        check = frame
-    else
-        check = CreateFrame("CheckButton", name, parent, "UICheckButtonTemplate")
-    end
-    SetCheckText(check, text)
-    check.tooltipText = tooltip
-    check:SetScript("OnEnter", function(self)
-        if not self.tooltipText or not GameTooltip then
-            return
-        end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(text, 1, 0.82, 0)
-        GameTooltip:AddLine(self.tooltipText, 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    check:SetScript("OnLeave", function()
-        if GameTooltip then
-            GameTooltip:Hide()
-        end
-    end)
-    return check
-end
-
-function XiusKillStreak:SetEnabled(value)
+function ns:SetEnabled(value)
     if self.syncing then
         return
     end
-    XiusKillStreakDB.enabled = value and true or false
-    if not XiusKillStreakDB.enabled then
-        self:StopSound()
-        self:ResetStreak()
-        if self.FinishBanner and not XiusKillStreakDB.unlocked then
+    DB().enabled = value and true or false
+    if not DB().enabled then
+        if self.StopSound then
+            self:StopSound()
+        end
+        if self.ResetStreak then
+            self:ResetStreak()
+        end
+        if self.FinishBanner and not DB().unlocked then
             self:FinishBanner()
         end
     end
-    self:UpdateCounter()
-    self:SyncOptions()
+    if self.UpdateCounter then
+        self:UpdateCounter()
+    end
 end
 
-function XiusKillStreak:SetSoundEnabled(value)
+function ns:SetSoundEnabled(value)
     if self.syncing then
         return
     end
-    XiusKillStreakDB.sound = value and true or false
-    if not XiusKillStreakDB.sound then
+    DB().sound = value and true or false
+    if not DB().sound and self.StopSound then
         self:StopSound()
     end
-    self:SyncOptions()
 end
 
-function XiusKillStreak:SetUnlocked(value)
+function ns:SetUnlocked(value)
     if self.syncing then
         return
     end
-    XiusKillStreakDB.unlocked = value and true or false
-    self:UpdateLock()
-    self:SyncOptions()
+    DB().unlocked = value and true or false
+    if self.UpdateLock then
+        self:UpdateLock()
+    end
 end
 
-function XiusKillStreak:SyncOptions()
-    if not XiusKillStreakDB then
+local function ApplyDefaults()
+    ns:SetEnabled(true)
+    ns:SetSoundEnabled(true)
+    ns:SetUnlocked(false)
+    RefreshPage()
+end
+
+local function UnlockFrames()
+    ns:SetUnlocked(true)
+    if ns.Print then
+        ns:Print("Banner and counter unlocked. Drag to move.")
+    end
+    RefreshPage()
+end
+
+local function TestBanner()
+    if ns.Test then
+        ns:Test(10)
+    end
+end
+
+local function ResetPosition()
+    if ns.ResetPositions then
+        ns:ResetPositions()
+    end
+    if ns.Print then
+        ns:Print("Banner and counter positions reset to default.")
+    end
+end
+
+function ns:SetupOptions()
+    if self.optionsReady then
         return
     end
-    self.syncing = true
-    if self.enableCheck then
-        self.enableCheck:SetChecked(XiusKillStreakDB.enabled)
+    if self.InitDB then
+        self:InitDB()
     end
-    if self.soundCheck then
-        self.soundCheck:SetChecked(XiusKillStreakDB.sound)
-    end
-    if self.unlockCheck then
-        self.unlockCheck:SetChecked(XiusKillStreakDB.unlocked)
-    end
-    self.syncing = false
-end
-
-function XiusKillStreak:RememberCategory(category)
-    self.optionsCategory = category
-    if category and category.GetID then
-        local ok, id = pcall(category.GetID, category)
-        if ok and id ~= nil then
-            self.optionsCategoryID = id
-            return
-        end
-    end
-    if type(category) == "table" and category.ID ~= nil then
-        self.optionsCategoryID = category.ID
-    end
-end
-
-function XiusKillStreak:BuildOptionsPanel()
-    if self.optionsPanel then
-        return self.optionsPanel
-    end
-
-    local panel = CreateFrame("Frame", "XiusKillStreakOptionsPanel")
-    panel.name = "Xius Kill Streak"
-    panel:Hide()
-
-    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 16, -16)
-    title:SetText("Xius Kill Streak")
-
-    local about = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    about:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
-    about:SetWidth(540)
-    about:SetJustifyH("LEFT")
-    about:SetJustifyV("TOP")
-    about:SetText("Mobs and enemy players both count. One kill is one streak point.\n\n2 Double Kill, 22s\n3 Triple Kill, 18s\n5 Multi Kill, 15s\n8 Mega Kill, 12s\n12 Ultra Kill, 10s\n16 Monster Kill, 8s\n20 Godlike, 6s\n25 Holy Shit, 5s\n30 Finish Him, 4s\n40 Toasty, 3s\n\nThe first kill has 25 seconds. Each line is the time allowed for the next kill.\n\n/xks opens this page. /xks test plays Toasty. /xks test 1-10 plays that tier. /xks reset clears the streak. /xks unlock and /xks lock toggle frame movement.")
-
-    local enable = MakeCheck(panel, "XiusKillStreakOptionsEnable", "Enable kill streaks", "Count killing blows on mobs and enemy players. Turning this off clears the current streak and hides the banner.")
-    enable:SetPoint("TOPLEFT", about, "BOTTOMLEFT", -2, -16)
-    enable:SetScript("OnClick", function(self)
-        PlayCheckSound(self:GetChecked())
-        XiusKillStreak:SetEnabled(self:GetChecked())
-    end)
-    self.enableCheck = enable
-
-    local sound = MakeCheck(panel, "XiusKillStreakOptionsSound", "Play streak sounds", "Play the announcer voice with each new tier. The test button still plays a sound when this is off.")
-    sound:SetPoint("TOPLEFT", enable, "BOTTOMLEFT", 0, -8)
-    sound:SetScript("OnClick", function(self)
-        PlayCheckSound(self:GetChecked())
-        XiusKillStreak:SetSoundEnabled(self:GetChecked())
-    end)
-    self.soundCheck = sound
-
-    local unlock = MakeCheck(panel, "XiusKillStreakOptionsUnlock", "Unlock banner and counter", "Drag the banner and the streak counter. Drag the counter corner to resize it.")
-    unlock:SetPoint("TOPLEFT", sound, "BOTTOMLEFT", 0, -8)
-    unlock:SetScript("OnClick", function(self)
-        PlayCheckSound(self:GetChecked())
-        XiusKillStreak:SetUnlocked(self:GetChecked())
-    end)
-    self.unlockCheck = unlock
-
-    local test = CreateFrame("Button", "XiusKillStreakOptionsTest", panel, "UIPanelButtonTemplate")
-    test:SetSize(160, 24)
-    test:SetPoint("TOPLEFT", unlock, "BOTTOMLEFT", 4, -16)
-    test:SetText("Test Toasty Banner")
-    test:SetScript("OnClick", function()
-        XiusKillStreak:Test(10)
-    end)
-
-    local resetPos = CreateFrame("Button", "XiusKillStreakOptionsResetPos", panel, "UIPanelButtonTemplate")
-    resetPos:SetSize(140, 24)
-    resetPos:SetPoint("LEFT", test, "RIGHT", 10, 0)
-    resetPos:SetText("Reset Positions")
-    resetPos:SetScript("OnClick", function()
-        if PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
-            pcall(PlaySound, SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
-        end
-        XiusKillStreak:ResetPositions()
-        XiusKillStreak:Print("Banner and counter positions reset to default.")
-    end)
-
-    panel.OnRefresh = function()
-        XiusKillStreak:SyncOptions()
-    end
-    panel.refresh = panel.OnRefresh
-    panel:SetScript("OnShow", function()
-        XiusKillStreak:SyncOptions()
-    end)
-
-    self.optionsPanel = panel
-    self:SyncOptions()
-    return panel
-end
-
-function XiusKillStreak:SetupCanvasOptions()
-    if not Settings or not Settings.RegisterCanvasLayoutCategory or not Settings.RegisterAddOnCategory then
-        return false
-    end
-
-    local ok, result = pcall(function()
-        local panel = XiusKillStreak:BuildOptionsPanel()
-        local category = Settings.RegisterCanvasLayoutCategory(panel, "Xius Kill Streak")
-        if not category then
-            return false
-        end
-        Settings.RegisterAddOnCategory(category)
-        XiusKillStreak:RememberCategory(category)
-        return true
-    end)
-    if not ok then
-        return false
-    end
-    return result and true or false
-end
-
-function XiusKillStreak:SetupLegacyOptions()
-    if not InterfaceOptions_AddCategory then
-        return false
-    end
-    local ok, result = pcall(function()
-        local panel = XiusKillStreak:BuildOptionsPanel()
-        InterfaceOptions_AddCategory(panel)
-        return true
-    end)
-    if not ok then
-        return false
-    end
-    return result and true or false
-end
-
-function XiusKillStreak:SetupOptions()
-    if self:SetupCanvasOptions() then
+    local Lib = SettingsLib()
+    if not Lib or not Lib.RegisterModule then
         return
     end
-    if self:SetupLegacyOptions() then
-        return
-    end
-    self:Print("Options could not be added to the menu. Type /xks test to preview Toasty.")
+    Lib:RegisterModule({
+        id = "KillStreak",
+        title = "Kill Streak",
+        menuTitle = "Kill Streak",
+        group = "Utilities & System",
+        order = 60,
+        getDB = function()
+            return XiusKillStreakDB
+        end,
+        defaults = {
+            enabled = true,
+            sound = true,
+            unlocked = false,
+        },
+        onResetDefaults = ApplyDefaults,
+        onUnlock = function(unlocked)
+            ns:SetUnlocked(unlocked and true or false)
+            RefreshPage()
+        end,
+        onUnlockFrames = UnlockFrames,
+        buildContent = function(_, api)
+            FitNote(api:AddNote(SUBTITLE), SUBTITLE)
+            api:AddSection("General")
+            api:AddCheckbox("Enable kill streaks", function()
+                return Flag("enabled")
+            end, function(value)
+                ns:SetEnabled(value)
+            end, TIP_ENABLE)
+            api:AddCheckbox("Play streak sounds", function()
+                return Flag("sound")
+            end, function(value)
+                ns:SetSoundEnabled(value)
+            end, TIP_SOUND)
+            api:AddCheckbox("Unlock banner and counter", function()
+                return Flag("unlocked")
+            end, function(value)
+                ns:SetUnlocked(value)
+                local Lib = SettingsLib()
+                if not value and Lib and Lib.NoteFramesLocked then
+                    Lib:NoteFramesLocked()
+                end
+            end, TIP_UNLOCK)
+            api:AddButtonGroup({
+                height = 32,
+                spacing = 8,
+                buttons = {
+                    {
+                        text = "Test Banner",
+                        width = 128,
+                        height = 32,
+                        onClick = TestBanner,
+                    },
+                    {
+                        text = "Reset Position",
+                        width = 140,
+                        height = 32,
+                        onClick = ResetPosition,
+                    },
+                    {
+                        text = "Defaults",
+                        width = 110,
+                        height = 32,
+                        onClick = ApplyDefaults,
+                    },
+                },
+            })
+            api:AddSection("Streak Tiers & Timers")
+            FitNote(api:AddNote(TIER_BLOCK), TIER_BLOCK)
+        end,
+    })
+    self.optionsReady = true
 end
 
-function XiusKillStreak:OpenOptions()
+function ns:OpenOptions()
     if not self.loaded then
         self:Print("Still loading. Try /xks again in a moment.")
         return
     end
-
-    if InCombatLockdown then
-        local okLock, inLockdown = pcall(InCombatLockdown)
-        if okLock and inLockdown == true then
-            self:Print("Cannot open the Settings window in combat. Use /xks unlock, /xks lock, /xks sound, or /xks reset.")
-            return
-        end
+    if ns.InLockdown() then
+        self:Print("Cannot open the Settings window in combat. Use /xks unlock, /xks lock, /xks sound, or /xks reset.")
+        return
     end
-
-    if Settings and Settings.OpenToCategory and self.optionsCategoryID ~= nil then
-        local ok = pcall(Settings.OpenToCategory, self.optionsCategoryID)
-        if ok then
-            return
-        end
+    if not self.optionsReady then
+        self:SetupOptions()
     end
-
-    if self.optionsCategory and Settings and Settings.OpenToCategory then
-        local ok = pcall(Settings.OpenToCategory, self.optionsCategory)
-        if ok then
-            return
-        end
+    local Lib = SettingsLib()
+    if Lib and Lib.OpenModule then
+        Lib:OpenModule("KillStreak")
+        return
     end
-
-    if self.optionsPanel and InterfaceOptionsFrame_OpenToCategory then
-        local ok = pcall(InterfaceOptionsFrame_OpenToCategory, self.optionsPanel)
-        if ok then
-            pcall(InterfaceOptionsFrame_OpenToCategory, self.optionsPanel)
-            return
-        end
-    end
-
-    if self.optionsPanel and Settings and Settings.OpenToCategory then
-        local ok = pcall(Settings.OpenToCategory, self.optionsPanel.name)
-        if ok then
-            return
-        end
-    end
-
-    self:Print("Type /xks test to play Toasty, or /xks test 1 through 10 for another tier.")
+    self:Print("Xius Core is required. Enable XiusCore, then type /xks again.")
 end

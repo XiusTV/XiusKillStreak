@@ -2,6 +2,11 @@
 
 All notable changes to Xius Kill Streak are documented here.
 
+## 1.3.1
+
+### Changed
+- XiusCore is now a required dependency. The addon stops at startup if XiusCore is not loaded, so settings and kill tracking cannot error on their own.
+
 ## 1.3.0
 
 ### Added

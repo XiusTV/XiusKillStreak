@@ -1,9 +1,10 @@
 --[[
-    Bloody streak banner and the small default-styled streak counter.
+    Bloody streak banner and the gold-bordered streak counter.
     The banner is the only place the custom fonts are used.
+    The counter uses the same metallic gold Blizzard frame as the other Xius HUD plates.
 ]]
 
-XiusKillStreak = XiusKillStreak or {}
+local _, ns = ...
 
 local TITLE_SIZE = 44
 local SUB_SIZE = 20
@@ -20,9 +21,59 @@ local string_format = string.format
 local string_gsub = string.gsub
 local pcall = pcall
 local type = type
-local GetTime = GetTime
 local CreateFrame = CreateFrame
-local CreateFont = CreateFont
+
+local layoutQueued = false
+local pendingShow
+
+local function FrameProtected(frame)
+    if not frame or not frame.IsProtected then
+        return false
+    end
+    local ok, protected = pcall(frame.IsProtected, frame)
+    if not ok then
+        return false
+    end
+    if ns.IsSecret(protected) then
+        return true
+    end
+    return protected and true or false
+end
+
+local function Defer(frame)
+    if FrameProtected(frame) and ns.InLockdown() then
+        layoutQueued = true
+        return true
+    end
+    return false
+end
+
+local function SetMouse(frame, enabled)
+    enabled = enabled and true or false
+    if frame.mouseEnabled == enabled then
+        return
+    end
+    if Defer(frame) then
+        return
+    end
+    frame.mouseEnabled = enabled
+    frame:EnableMouse(enabled)
+end
+
+local function SetShown(frame, shown)
+    local visible = frame:IsShown() and true or false
+    if shown == visible then
+        return
+    end
+    if Defer(frame) then
+        return
+    end
+    if shown then
+        frame:Show()
+    else
+        frame:Hide()
+    end
+end
 
 local function TrySetFont(fontObject, path, size)
     if not fontObject or not fontObject.SetFont or not path or path == "" then
@@ -42,7 +93,7 @@ local function TrySetFont(fontObject, path, size)
     return false
 end
 
-function XiusKillStreak:ApplyFontObject(fontObject, size, primaryPath, secondaryPath)
+function ns:ApplyFontObject(fontObject, size, primaryPath, secondaryPath)
     if TrySetFont(fontObject, primaryPath, size) then
         return
     end
@@ -68,14 +119,13 @@ local function SetBannerAlpha(banner, alpha)
 end
 
 local function BannerOnUpdate(frame, elapsed)
-    if not frame.animating then
+    if not frame.animating or Defer(frame) then
         frame:SetScript("OnUpdate", nil)
         return
     end
+    elapsed = ns.PlainNumber(elapsed) or 0
     if elapsed > 0.08 then
         elapsed = 0.08
-    elseif elapsed < 0 then
-        elapsed = 0
     end
     local t = (frame.animElapsed or 0) + elapsed
     frame.animElapsed = t
@@ -98,11 +148,11 @@ local function BannerOnUpdate(frame, elapsed)
         local p = (t - 1.5) / 0.5
         SetBannerAlpha(frame, 1 - p)
     else
-        XiusKillStreak:FinishBanner()
+        ns:FinishBanner()
     end
 end
 
-function XiusKillStreak:StyleBannerText()
+function ns:StyleBannerText()
     local banner = self.banner
     if not banner then
         return
@@ -115,18 +165,18 @@ function XiusKillStreak:StyleBannerText()
     banner.sub:SetShadowOffset(2, -2)
 end
 
-function XiusKillStreak:SetBannerMouse(enabled)
+function ns:SetBannerMouse(enabled)
     local banner = self.banner
     if not banner then
         return
     end
-    banner:EnableMouse(enabled and true or false)
+    SetMouse(banner, enabled)
     if banner.content then
         banner.content:EnableMouse(false)
     end
 end
 
-function XiusKillStreak:FinishBanner()
+function ns:FinishBanner()
     local banner = self.banner
     if not banner then
         return
@@ -144,13 +194,13 @@ function XiusKillStreak:FinishBanner()
     end
     SetBannerAlpha(banner, 0)
     self:SetBannerMouse(false)
-    banner:Hide()
+    SetShown(banner, false)
     if XiusKillStreakDB and XiusKillStreakDB.unlocked then
         self:ShowPlacementPreview()
     end
 end
 
-function XiusKillStreak:ShowPlacementPreview()
+function ns:ShowPlacementPreview()
     local banner = self.banner
     if not banner then
         return
@@ -166,10 +216,10 @@ function XiusKillStreak:ShowPlacementPreview()
     banner.sub:SetText("DRAG TO MOVE")
     SetBannerAlpha(banner, 1)
     self:SetBannerMouse(true)
-    banner:Show()
+    SetShown(banner, true)
 end
 
-function XiusKillStreak:CreateBanner()
+function ns:CreateBanner()
     if self.banner then
         return
     end
@@ -196,20 +246,7 @@ function XiusKillStreak:CreateBanner()
     content:SetAlpha(1)
     banner.content = content
 
-    local titleFont = _G.XiusKillStreakTitleFont
-    if not titleFont then
-        titleFont = CreateFont("XiusKillStreakTitleFont")
-    end
-    local subFont = _G.XiusKillStreakSubFont
-    if not subFont then
-        subFont = CreateFont("XiusKillStreakSubFont")
-    end
-
-    self:ApplyFontObject(titleFont, TITLE_SIZE, self.TITLE_FONT, self.SUB_FONT)
-    self:ApplyFontObject(subFont, SUB_SIZE, self.SUB_FONT, self.TITLE_FONT)
-
     local title = content:CreateFontString(nil, "OVERLAY")
-    title:SetFontObject(titleFont)
     self:ApplyFontObject(title, TITLE_SIZE, self.TITLE_FONT, self.SUB_FONT)
     title:SetPoint("CENTER", content, "CENTER", 0, 18)
     title:SetJustifyH("CENTER")
@@ -219,7 +256,6 @@ function XiusKillStreak:CreateBanner()
     banner.title = title
 
     local sub = content:CreateFontString(nil, "OVERLAY")
-    sub:SetFontObject(subFont)
     self:ApplyFontObject(sub, SUB_SIZE, self.SUB_FONT, self.TITLE_FONT)
     sub:SetPoint("TOP", title, "BOTTOM", 0, -4)
     sub:SetJustifyH("CENTER")
@@ -234,7 +270,7 @@ function XiusKillStreak:CreateBanner()
     SetBannerAlpha(banner, 0)
 
     banner:SetScript("OnDragStart", function(frame)
-        if not XiusKillStreakDB or not XiusKillStreakDB.unlocked then
+        if not XiusKillStreakDB or not XiusKillStreakDB.unlocked or Defer(frame) then
             return
         end
         frame.animating = false
@@ -251,7 +287,7 @@ function XiusKillStreak:CreateBanner()
     banner:SetScript("OnDragStop", function(frame)
         frame.moving = false
         frame:StopMovingOrSizing()
-        XiusKillStreak:SaveBannerPosition()
+        ns:SaveBannerPosition()
     end)
 
     banner:SetScript("OnHide", function(frame)
@@ -262,11 +298,15 @@ function XiusKillStreak:CreateBanner()
     end)
 end
 
-function XiusKillStreak:ShowBanner(titleText, subText)
+function ns:ShowBanner(titleText, subText)
     if not self.banner then
         self:CreateBanner()
     end
     local banner = self.banner
+    if Defer(banner) then
+        pendingShow = { titleText or "", subText or "" }
+        return
+    end
     banner.title:SetText(titleText or "")
     banner.sub:SetText(subText or "")
     banner.animElapsed = 0
@@ -279,23 +319,73 @@ function XiusKillStreak:ShowBanner(titleText, subText)
     SetBannerAlpha(banner, 0)
     self:SetBannerMouse(XiusKillStreakDB and XiusKillStreakDB.unlocked and true or false)
     banner:SetScript("OnUpdate", BannerOnUpdate)
-    banner:Show()
+    SetShown(banner, true)
+end
+
+function ns:FlushLayout()
+    if not layoutQueued or ns.InLockdown() then
+        return
+    end
+    layoutQueued = false
+    self:ApplyBannerPosition()
+    self:ApplyCounterPosition()
+    self:UpdateLock()
+    local banner = self.banner
+    if banner and banner.animating then
+        banner:SetScript("OnUpdate", BannerOnUpdate)
+    end
+    if pendingShow then
+        local title = pendingShow[1]
+        local sub = pendingShow[2]
+        pendingShow = nil
+        self:ShowBanner(title, sub)
+    end
+end
+
+local function PlainAnchor(value, fallback)
+    if value == nil or ns.IsSecret(value) or type(value) ~= "string" or value == "" then
+        return fallback
+    end
+    return value
 end
 
 local function RestorePoint(frame, pos, point, x, y)
+    if Defer(frame) then
+        return
+    end
     frame:ClearAllPoints()
-    if type(pos) == "table" and type(pos.point) == "string" and (pos.x == nil or type(pos.x) == "number") and (pos.y == nil or type(pos.y) == "number") then
-        local relPoint = type(pos.relPoint) == "string" and pos.relPoint or point
-        local ok = pcall(frame.SetPoint, frame, pos.point, UIParent, relPoint, pos.x or 0, pos.y or 0)
-        if ok then
-            return
+    if type(pos) == "table" then
+        local anchor = PlainAnchor(pos.point, nil)
+        local relPoint = PlainAnchor(pos.relPoint, point)
+        local posX = ns.PlainNumber(pos.x)
+        local posY = ns.PlainNumber(pos.y)
+        if anchor and posX and posY then
+            local ok = pcall(frame.SetPoint, frame, anchor, UIParent, relPoint, posX, posY)
+            if ok then
+                return
+            end
+            frame:ClearAllPoints()
         end
-        frame:ClearAllPoints()
     end
     frame:SetPoint(point, UIParent, point, x, y)
 end
 
-function XiusKillStreak:ApplyBannerPosition()
+local function ReadPoint(frame)
+    local ok, point, _, relPoint, x, y = pcall(frame.GetPoint, frame, 1)
+    if not ok or ns.IsSecret(point) or ns.IsSecret(relPoint) or ns.IsSecret(x) or ns.IsSecret(y) then
+        return nil
+    end
+    point = PlainAnchor(point, nil)
+    if not point then
+        return nil
+    end
+    relPoint = PlainAnchor(relPoint, point)
+    x = ns.PlainNumber(x) or 0
+    y = ns.PlainNumber(y) or 0
+    return point, relPoint, x, y
+end
+
+function ns:ApplyBannerPosition()
     local banner = self.banner
     if not banner then
         return
@@ -303,33 +393,57 @@ function XiusKillStreak:ApplyBannerPosition()
     RestorePoint(banner, XiusKillStreakDB and XiusKillStreakDB.bannerPos, "CENTER", 0, 160)
 end
 
-function XiusKillStreak:SaveBannerPosition()
+function ns:SaveBannerPosition()
     local banner = self.banner
     if not banner or not XiusKillStreakDB then
         return
     end
-    local point, _, relPoint, x, y = banner:GetPoint(1)
+    local point, relPoint, x, y = ReadPoint(banner)
     if not point then
         return
     end
     XiusKillStreakDB.bannerPos = {
         point = point,
-        relPoint = relPoint or point,
-        x = x or 0,
-        y = y or 0,
+        relPoint = relPoint,
+        x = x,
+        y = y,
     }
 end
 
 local COUNTER_BACKDROP = {
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true,
-    tileSize = 32,
-    edgeSize = 32,
-    insets = { left = 11, right = 12, top = 12, bottom = 11 },
+    bgFile = "Interface\\Buttons\\WHITE8X8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = false,
+    edgeSize = 14,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 
-function XiusKillStreak:CreateCounter()
+local function AddInnerShadow(frame)
+    local function Line(horizontal)
+        local tex = frame:CreateTexture(nil, "BORDER", nil, 1)
+        tex:SetColorTexture(0, 0, 0, 0.65)
+        if horizontal then
+            tex:SetHeight(1)
+        else
+            tex:SetWidth(1)
+        end
+        return tex
+    end
+    local top = Line(true)
+    top:SetPoint("TOPLEFT", frame, "TOPLEFT", 5, -5)
+    top:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -5, -5)
+    local bottom = Line(true)
+    bottom:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 5, 5)
+    bottom:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -5, 5)
+    local left = Line(false)
+    left:SetPoint("TOPLEFT", frame, "TOPLEFT", 5, -5)
+    left:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 5, 5)
+    local right = Line(false)
+    right:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -5, -5)
+    right:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -5, 5)
+end
+
+function ns:CreateCounter()
     if self.counter then
         return
     end
@@ -357,6 +471,9 @@ function XiusKillStreak:CreateCounter()
 
     if counter.SetBackdrop then
         pcall(counter.SetBackdrop, counter, COUNTER_BACKDROP)
+        pcall(counter.SetBackdropColor, counter, 0.06, 0.06, 0.08, 0.92)
+        pcall(counter.SetBackdropBorderColor, counter, 1.0, 0.82, 0.35, 1)
+        pcall(AddInnerShadow, counter)
     end
 
     if counter.SetResizeBounds then
@@ -367,12 +484,14 @@ function XiusKillStreak:CreateCounter()
     end
 
     local heading = counter:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    heading:SetPoint("TOP", counter, "TOP", 0, -16)
+    heading:SetPoint("TOP", counter, "TOP", 0, -14)
     heading:SetText("Kill Streak")
+    heading:SetTextColor(1, 0.82, 0, 1)
     counter.heading = heading
 
     local text = counter:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     text:SetPoint("TOP", heading, "BOTTOM", 0, -4)
+    text:SetTextColor(0.93, 0.93, 0.91, 1)
     text:SetWidth(160)
     text:SetJustifyH("CENTER")
     text:SetText("Streak: 0")
@@ -388,24 +507,24 @@ function XiusKillStreak:CreateCounter()
     counter.grip = grip
 
     grip:SetScript("OnMouseDown", function(_, button)
-        if button ~= "LeftButton" or not XiusKillStreakDB or not XiusKillStreakDB.unlocked then
+        if button ~= "LeftButton" or not XiusKillStreakDB or not XiusKillStreakDB.unlocked or Defer(counter) then
             return
         end
-        XiusKillStreak.sizing = true
+        ns.sizing = true
         counter:StartSizing("BOTTOMRIGHT")
     end)
 
     grip:SetScript("OnMouseUp", function()
-        if XiusKillStreak.sizing then
-            XiusKillStreak.sizing = false
+        if ns.sizing then
+            ns.sizing = false
             counter:StopMovingOrSizing()
-            XiusKillStreak:SaveCounterSize()
-            XiusKillStreak:SaveCounterPosition()
+            ns:SaveCounterSize()
+            ns:SaveCounterPosition()
         end
     end)
 
     counter:SetScript("OnDragStart", function(frame)
-        if not XiusKillStreakDB or not XiusKillStreakDB.unlocked then
+        if not XiusKillStreakDB or not XiusKillStreakDB.unlocked or Defer(frame) then
             return
         end
         frame.moving = true
@@ -415,13 +534,13 @@ function XiusKillStreak:CreateCounter()
     counter:SetScript("OnDragStop", function(frame)
         frame.moving = false
         frame:StopMovingOrSizing()
-        XiusKillStreak:SaveCounterPosition()
+        ns:SaveCounterPosition()
     end)
 
     counter:SetScript("OnHide", function(frame)
-        if frame.moving or XiusKillStreak.sizing then
+        if frame.moving or ns.sizing then
             frame.moving = false
-            XiusKillStreak.sizing = false
+            ns.sizing = false
             frame:StopMovingOrSizing()
         end
     end)
@@ -430,10 +549,12 @@ function XiusKillStreak:CreateCounter()
         if frame.OnBackdropSizeChanged then
             pcall(frame.OnBackdropSizeChanged, frame)
         end
-        if type(width) ~= "number" or type(height) ~= "number" then
+        width = ns.PlainNumber(width)
+        height = ns.PlainNumber(height)
+        if not width or not height then
             return
         end
-        if XiusKillStreak.sizing and XiusKillStreakDB then
+        if ns.sizing and XiusKillStreakDB then
             XiusKillStreakDB.counterWidth = width
             XiusKillStreakDB.counterHeight = height
         end
@@ -445,59 +566,66 @@ function XiusKillStreak:CreateCounter()
     self.counter = counter
 end
 
-function XiusKillStreak:ApplyCounterPosition()
+function ns:ApplyCounterPosition()
     local counter = self.counter
     if not counter then
         return
     end
+    if Defer(counter) then
+        return
+    end
     local db = XiusKillStreakDB
-    local width = DEFAULT_COUNTER_W
-    local height = DEFAULT_COUNTER_H
-    if db and type(db.counterWidth) == "number" and type(db.counterHeight) == "number" then
-        width = db.counterWidth
-        height = db.counterHeight
-        if width < MIN_COUNTER_W then
-            width = MIN_COUNTER_W
-        elseif width > MAX_COUNTER_W then
-            width = MAX_COUNTER_W
-        end
-        if height < MIN_COUNTER_H then
-            height = MIN_COUNTER_H
-        elseif height > MAX_COUNTER_H then
-            height = MAX_COUNTER_H
-        end
+    local width = ns.PlainNumber(db and db.counterWidth) or DEFAULT_COUNTER_W
+    local height = ns.PlainNumber(db and db.counterHeight) or DEFAULT_COUNTER_H
+    if width < MIN_COUNTER_W then
+        width = MIN_COUNTER_W
+    elseif width > MAX_COUNTER_W then
+        width = MAX_COUNTER_W
+    end
+    if height < MIN_COUNTER_H then
+        height = MIN_COUNTER_H
+    elseif height > MAX_COUNTER_H then
+        height = MAX_COUNTER_H
     end
     counter:SetSize(width, height)
     RestorePoint(counter, db and db.counterPos, "TOP", 0, -24)
 end
 
-function XiusKillStreak:SaveCounterPosition()
+function ns:SaveCounterPosition()
     local counter = self.counter
     if not counter or not XiusKillStreakDB then
         return
     end
-    local point, _, relPoint, x, y = counter:GetPoint(1)
+    local point, relPoint, x, y = ReadPoint(counter)
     if not point then
         return
     end
     XiusKillStreakDB.counterPos = {
         point = point,
-        relPoint = relPoint or point,
-        x = x or 0,
-        y = y or 0,
+        relPoint = relPoint,
+        x = x,
+        y = y,
     }
 end
 
-function XiusKillStreak:SaveCounterSize()
+function ns:SaveCounterSize()
     local counter = self.counter
     if not counter or not XiusKillStreakDB then
         return
     end
-    XiusKillStreakDB.counterWidth = counter:GetWidth()
-    XiusKillStreakDB.counterHeight = counter:GetHeight()
+    local okW, rawW = pcall(counter.GetWidth, counter)
+    local okH, rawH = pcall(counter.GetHeight, counter)
+    local width = okW and ns.PlainNumber(rawW) or nil
+    local height = okH and ns.PlainNumber(rawH) or nil
+    if width then
+        XiusKillStreakDB.counterWidth = width
+    end
+    if height then
+        XiusKillStreakDB.counterHeight = height
+    end
 end
 
-function XiusKillStreak:ResetPositions()
+function ns:ResetPositions()
     if XiusKillStreakDB then
         XiusKillStreakDB.bannerPos = nil
         XiusKillStreakDB.counterPos = nil
@@ -508,10 +636,14 @@ function XiusKillStreak:ResetPositions()
     self:ApplyCounterPosition()
 end
 
-function XiusKillStreak:UpdateLock()
+function ns:UpdateLock()
     local unlocked = XiusKillStreakDB and XiusKillStreakDB.unlocked and true or false
     local banner = self.banner
     local counter = self.counter
+    if ns.InLockdown() and ((banner and FrameProtected(banner)) or (counter and FrameProtected(counter))) then
+        layoutQueued = true
+        return
+    end
 
     if banner then
         if not unlocked and banner.moving then
@@ -539,19 +671,15 @@ function XiusKillStreak:UpdateLock()
         counter:SetMovable(unlocked)
         counter:SetResizable(unlocked)
         if counter.grip then
-            counter.grip:EnableMouse(unlocked)
-            if unlocked then
-                counter.grip:Show()
-            else
-                counter.grip:Hide()
-            end
+            SetMouse(counter.grip, unlocked)
+            SetShown(counter.grip, unlocked)
         end
     end
 
     self:UpdateCounter()
 end
 
-function XiusKillStreak:UpdateCounter()
+function ns:UpdateCounter()
     local counter = self.counter
     if not counter then
         return
@@ -561,47 +689,53 @@ function XiusKillStreak:UpdateCounter()
     local unlocked = db and db.unlocked and true or false
     local enabled = db and db.enabled and true or false
 
-    if not enabled and not unlocked then
-        counter:EnableMouse(false)
-        counter:Hide()
-        counter.lastMode = nil
-        counter.line = nil
+    if Defer(counter) then
         return
     end
 
-    if self.streak and self.streak > 0 and self.lastKillAt then
-        local remain = self:CurrentWindow() - (GetTime() - self.lastKillAt)
+    if not enabled and not unlocked then
+        SetMouse(counter, false)
+        SetShown(counter, false)
+        counter.lastMode = nil
+        counter.lastStreak = nil
+        counter.lastSec = nil
+        return
+    end
+
+    local now = ns.Now()
+    local lastKill = ns.PlainNumber(self.lastKillAt)
+    if enabled and self.streak and self.streak > 0 and lastKill and now then
+        local remain = self:CurrentWindow() - (now - lastKill)
         if remain < 0 then
             remain = 0
         end
         local sec = math_floor(remain + 0.5)
         if counter.lastMode ~= 1 or counter.lastStreak ~= self.streak or counter.lastSec ~= sec then
-            local line = string_format("Streak: %d\nNext kill: %ds", self.streak, sec)
             counter.lastMode = 1
             counter.lastStreak = self.streak
             counter.lastSec = sec
-            counter.line = line
-            counter.text:SetText(line)
+            if counter.text.SetFormattedText then
+                counter.text:SetFormattedText("Streak: %d\nNext kill: %ds", self.streak, sec)
+            else
+                counter.text:SetText(string_format("Streak: %d\nNext kill: %ds", self.streak, sec))
+            end
         end
-        counter:EnableMouse(unlocked)
-        counter:Show()
+        SetMouse(counter, unlocked)
+        SetShown(counter, true)
     elseif unlocked then
         if counter.lastMode ~= 2 then
-            local line = "Streak: 0\nDrag to move"
             counter.lastMode = 2
             counter.lastStreak = 0
             counter.lastSec = nil
-            counter.line = line
-            counter.text:SetText(line)
+            counter.text:SetText("Streak: 0\nDrag to move")
         end
-        counter:EnableMouse(true)
-        counter:Show()
+        SetMouse(counter, true)
+        SetShown(counter, true)
     else
-        counter:EnableMouse(false)
-        counter:Hide()
+        SetMouse(counter, false)
+        SetShown(counter, false)
         counter.lastMode = nil
         counter.lastStreak = nil
         counter.lastSec = nil
-        counter.line = nil
     end
 end
