@@ -1,13 +1,13 @@
 # Xius Kill Streak
 
-A ten-tier kill streak announcer for **World of Warcraft Forever (1.60.1)** and **modern retail**. Mobs and enemy players both count. Each new tier fills the screen with a banner and an announcer call, and a small counter shows the chain plus the time left to keep it going. Dying clears the streak.
+A ten-tier kill streak announcer for **modern World of Warcraft** and **World of Warcraft Forever**. Mobs and enemy players both count. Each new tier fills the screen with a banner and an announcer call, and a small counter shows the chain plus the time left to keep it going. Dying clears the streak.
+
+Settings open inside [Xius Core](https://github.com/XiusTV/XiusCore). Xius Core is required.
 
 **Folder name:** `XiusKillStreak`  
 **Interface:** `120105`, `120107`, `16001`  
 **Commands:** `/xks` · `/xiuskillstreak`  
-**Version:** `1.3.0`
-
-Near-black panels and the shared Xius options page keep it with the rest of the set. The banner itself uses a bloody title treatment so a new tier reads instantly in a fight.
+**Version:** `1.3.1`
 
 ## Features
 
@@ -40,13 +40,14 @@ The first kill, before any tier, has 25 seconds.
 - **Move and resize:** Unlock the frames, drag the banner or the counter, and drag the counter corner to resize it.
 - **Sounds:** Each tier plays its announcer call. Sounds can be turned off. The test button still plays.
 
-Counting does not use the combat log. Experience text, the killing-blow float, "You have slain", party kills, honor, and your current target dying cover kills that grant no experience or hide names in combat. That keeps it working on Forever and retail, where addon combat-log access is blocked.
+Counting does not use the combat log. Experience text, the killing-blow float, "You have slain", party kills, honor, and your current target dying cover kills that grant no experience or hide names in combat.
 
 ## Controls & Slash Commands
 
 | Command / Input | Action |
 | --- | --- |
-| `/xks` or `/xiuskillstreak` | Open the options page |
+| `/xks` or `/xiuskillstreak` | Open Kill Streak in Xius Core |
+| `/xius streak` | Open Kill Streak in Xius Core |
 | `/xks test` | Play the Toasty banner |
 | `/xks test 1` through `/xks test 10` | Play that tier |
 | `/xks reset` or `/xks clear` | Clear the current streak |
@@ -57,55 +58,54 @@ Counting does not use the combat log. Experience text, the killing-blow float, "
 | Drag the banner or counter | Move them (when unlocked) |
 | Counter corner | Resize the counter (when unlocked) |
 
-The same controls are under **Game Menu → Options → AddOns → Xius Kill Streak**.
+## Configuration
+
+Open the page with `/xks` or `/xius streak`. Xius Core has to be installed and enabled.
 
 - **Enable kill streaks:** Count killing blows. Turning this off clears the current streak and hides the banner.
 - **Play streak sounds:** Announcer voice on each new tier.
 - **Unlock banner and counter:** Drag to move. Drag the counter corner to resize.
-- **Test Toasty Banner** and **Reset Positions**.
+- **Test Banner** and **Reset Position**.
 
-Position, size, and these options are saved per account in `XiusKillStreakDB`.
+Position, size, and these options are saved for the account.
 
 ## Installation
 
-1. Download the latest release `.zip` (or use **Code → Download ZIP** on this page).
-2. Extract the `XiusKillStreak` folder into your client's addon directory:
+1. Install [Xius Core](https://www.curseforge.com/wow/addons/xius-core) first.
+2. Download the latest release `.zip` (or use **Code → Download ZIP** on this page).
+3. Extract the `XiusKillStreak` folder into your client's addon directory:
    - Forever: `World of Warcraft Forever\Interface\AddOns`
    - Retail: `World of Warcraft\_retail_\Interface\AddOns`
    - If you downloaded the repository ZIP, rename the extracted `XiusKillStreak-main` folder to `XiusKillStreak`.
-3. Verify the folder contains `XiusKillStreak.toc`, `Config.lua`, `Banner.lua`, `Options.lua`, and `Core.lua`, plus `Sounds` and `Font`.
-4. Launch the game, confirm Xius Kill Streak is checked in your AddOns menu, and run `/reload`.
-5. Type `/xks test` to preview Toasty, then `/xks unlock` and drag the banner and counter into place.
+4. Verify the folder contains `XiusKillStreak.toc`, `Config.lua`, `Banner.lua`, `Options.lua`, and `Core.lua`, plus `Sounds` and `Font`.
+5. Launch the game, confirm Xius Core and Xius Kill Streak are checked in your AddOns menu, and run `/reload`.
+6. Type `/xks test` to preview Toasty, then `/xks unlock` and drag the banner and counter into place.
 
-**Compatibility:** World of Warcraft Forever (TOC `16001`) and modern retail (TOC `120105`, `120107`). Pure Lua 5.1 with zero external library dependencies.
-
-## File Overview
-
-| File | Purpose |
-| --- | --- |
-| `XiusKillStreak.toc` | Addon manifest (interface versions, saved variables, load order) |
-| `Config.lua` | Tier list, countdown windows, announcer files, and banner fonts |
-| `Banner.lua` | Streak banner, streak counter, move, and resize |
-| `Options.lua` | AddOns options page |
-| `Core.lua` | Kill tracking, sounds, and slash commands |
-| `Sounds` | Announcer calls, one file per tier |
-| `Font` | Banner fonts |
+**Compatibility:** World of Warcraft Forever (TOC `16001`) and modern retail (TOC `120105`, `120107`). Requires Xius Core.
 
 ## More From Xius
 
-**Xius Marks Bar**: A compact raid marking bar. Click the flag for world markers or the star for target markers, with 5 / 10 / 20 pull timers, ready check, and role check built in.  
-[GitHub](https://github.com/XiusTV/XiusMarksBar) · [CurseForge](https://www.curseforge.com/wow/addons/xius-marks-bar)
+### Xius Core - [GitHub](https://github.com/XiusTV/XiusCore) · [CurseForge](https://www.curseforge.com/wow/addons/xius-core)
 
-**Xius Threat Meter**: A clean, lightweight threat meter. Shows who is on the enemy's threat table, how much threat each player and pet has, and warns you before you pull aggro.  
-[GitHub](https://github.com/XiusTV/XiusThreatMeter) · [CurseForge](https://www.curseforge.com/wow/addons/xius-threat-meter)
+The settings and quality-of-life hub for the Xius addons. One window holds Quality of Life, General, account gold, and the settings for every other Xius addon you have installed.
 
-**Xius XP & Reputation Tracker**: A compact HUD card that replaces the default XP and reputation bars with a single movable panel: level, XP, rested, watched faction, session rates, gold, and time-to-level.  
-[GitHub](https://github.com/XiusTV/XiusXPTracker) · [CurseForge](https://www.curseforge.com/wow/addons/xius-xp-and-reputation-tracker)
+### Xius Threat Meter - [GitHub](https://github.com/XiusTV/XiusThreatMeter) · [CurseForge](https://www.curseforge.com/wow/addons/xius-threat-meter)
 
-**Xius Max Graphics**: Pick-and-choose graphics upgrades for Forever and retail. Ultimate, Balance, and Defaults presets push view distance, grass, shadows, water, and image clarity past the normal graphics menu, with optional loot and gathering sparkles.  
-[GitHub](https://github.com/XiusTV/XiusMaxGFX)
+A threat meter. Shows who is on the enemy's threat table, how much threat each player and pet has, and warns you before you pull aggro.
 
-All Xius addons share the same clean, dark gold style for a unified UI.
+### Xius XP & Reputation Tracker - [GitHub](https://github.com/XiusTV/XiusXPTracker) · [CurseForge](https://www.curseforge.com/wow/addons/xius-xp-and-reputation-tracker)
+
+A HUD card for level, XP, rested XP, watched faction, session rates, gold, and time-to-level.
+
+### Xius Marks Bar - [GitHub](https://github.com/XiusTV/XiusMarksBar) · [CurseForge](https://www.curseforge.com/wow/addons/xius-marks-bar)
+
+A raid marking bar. Click the flag for world markers or the star for target markers. Includes 5 / 10 / 20 pull timers, ready check, and role check.
+
+### Xius Max Graphics - [GitHub](https://github.com/XiusTV/XiusMaxGFX) · [CurseForge](https://www.curseforge.com/wow/addons/xius-max-graphics)
+
+Graphics presets for Forever and retail. Ultimate, Balance, and Defaults raise view distance, grass, shadows, water, and image clarity, with optional loot and gathering sparkles.
+
+Their settings open from Xius Core.
 
 ## Credits
 
