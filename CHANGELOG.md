@@ -2,6 +2,11 @@
 
 All notable changes to Xius Kill Streak are documented here.
 
+## 1.3.2
+
+### Changed
+- Every script now stops at startup when XiusCore is not loaded.
+
 ## 1.3.1
 
 ### Changed

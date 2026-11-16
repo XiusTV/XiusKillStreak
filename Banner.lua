@@ -6,6 +6,19 @@
 
 local _, ns = ...
 
+local XiusCore = _G.XiusCore or _G.XiusUI or _G.XiusCoreSettingsLib
+if not XiusCore and C_AddOns and C_AddOns.IsAddOnLoaded then
+    local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, "XiusCore")
+    XiusCore = ok and loaded and true or false
+end
+if not XiusCore and IsAddOnLoaded then
+    local ok, loaded = pcall(IsAddOnLoaded, "XiusCore")
+    XiusCore = ok and loaded and true or false
+end
+if not XiusCore then
+    return
+end
+
 local TITLE_SIZE = 44
 local SUB_SIZE = 20
 local DEFAULT_COUNTER_W = 200

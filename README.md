@@ -7,7 +7,7 @@ Settings open inside [Xius Core](https://github.com/XiusTV/XiusCore). Xius Core 
 **Folder name:** `XiusKillStreak`  
 **Interface:** `120105`, `120107`, `16001`  
 **Commands:** `/xks` · `/xiuskillstreak`  
-**Version:** `1.3.1`
+**Version:** `1.3.2`
 
 ## Features
 

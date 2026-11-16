@@ -7,6 +7,19 @@
 
 local _, ns = ...
 
+local XiusCore = _G.XiusCore or _G.XiusUI or _G.XiusCoreSettingsLib
+if not XiusCore and C_AddOns and C_AddOns.IsAddOnLoaded then
+    local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, "XiusCore")
+    XiusCore = ok and loaded and true or false
+end
+if not XiusCore and IsAddOnLoaded then
+    local ok, loaded = pcall(IsAddOnLoaded, "XiusCore")
+    XiusCore = ok and loaded and true or false
+end
+if not XiusCore then
+    return
+end
+
 local SUBTITLE = "Tracks consecutive killing blows on mobs and enemy players with Unreal-style banners and sounds."
 
 local TIP_ENABLE = "Count killing blows on mobs and enemy players. Turning off clears the current streak."
