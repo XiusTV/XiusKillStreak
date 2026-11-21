@@ -1,8 +1,9 @@
-## Interface: 120105, 120107
-## Title: Xius Kill Streak
+## Interface: 120100, 120105, 120107, 16001
+## Title: |cffd4a85aXius|r |cffff4d4dKill Streak|r
+## IconTexture: Interface\Icons\Ability_DualWield
 ## Notes: Ten-tier escalating kill streak announcer. Type /xks
 ## Author: Xius
-## Version: 1.3.2
+## Version: 1.4.0
 ## SavedVariables: XiusKillStreakDB
 ## LoadSavedVariablesFirst: 1
 ## Dependencies: XiusCore
@@ -10,12 +11,11 @@
 ## X-Part-Of: XiusCore
 ## Group: XiusCore
 ## DefaultState: enabled
-## AllowLoadGameType: standard
-## ExcludeLoadGameType: classic
+## AllowLoadGameType: standard, forever, camelot
 ## Category: Combat
 ## X-Website: https://github.com/XiusTV/XiusKillStreak
 
 Config.lua
 Banner.lua
-Options.lua
 Core.lua
+Options.lua

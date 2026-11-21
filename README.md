@@ -5,9 +5,9 @@ A ten-tier kill streak announcer for **modern World of Warcraft** and **World of
 Settings open inside [Xius Core](https://github.com/XiusTV/XiusCore). Xius Core is required.
 
 **Folder name:** `XiusKillStreak`  
-**Interface:** `120105`, `120107`, `16001`  
+**Interface:** `120100`, `120105`, `120107`, `16001`  
 **Commands:** `/xks` · `/xiuskillstreak`  
-**Version:** `1.3.2`
+**Version:** `1.4.0`
 
 ## Features
 
@@ -60,12 +60,22 @@ Counting does not use the combat log. Experience text, the killing-blow float, "
 
 ## Configuration
 
-Open the page with `/xks` or `/xius streak`. Xius Core has to be installed and enabled.
+Open the page with `/xks` or `/xius streak`. Xius Core has to be installed and enabled. The page has two tabs.
 
-- **Enable kill streaks:** Count killing blows. Turning this off clears the current streak and hides the banner.
-- **Play streak sounds:** Announcer voice on each new tier.
-- **Unlock banner and counter:** Drag to move. Drag the counter corner to resize.
-- **Test Banner** and **Reset Position**.
+**General**
+
+- **Enable kill streaks:** Count killing blows. Turning this off clears the current streak.
+- **PvE / PvP filters:** Track mobs, enemy players, or both. Gray mobs can be ignored.
+- **Streak reset timer:** 5 to 60 seconds after the first kill. Later tiers use a shorter window scaled from that base.
+- **Banner scale and position:** Scale from 50% to 200%, or nudge the banner with the X and Y sliders. Unlock still lets you drag.
+- **Test Preview**, **Clear Streak**, **Reset Position**, and **Defaults**.
+
+**Audio & Announcements**
+
+- **Announcer sounds:** On or off, with a sound channel and a volume that only affects the streak calls.
+- **Chat callouts:** Optional message on each tier, sent to local chat, emote, say, yell, party, or raid.
+- **Voice emote:** Optional character emote, such as Roar, when a tier is reached.
+- **Individual tiers:** Turn a tier's banner, sound, and callouts off. The streak counter still advances.
 
 Position, size, and these options are saved for the account.
 
@@ -81,7 +91,7 @@ Position, size, and these options are saved for the account.
 5. Launch the game, confirm Xius Core and Xius Kill Streak are checked in your AddOns menu, and run `/reload`.
 6. Type `/xks test` to preview Toasty, then `/xks unlock` and drag the banner and counter into place.
 
-**Compatibility:** World of Warcraft Forever (TOC `16001`) and modern retail (TOC `120105`, `120107`). Requires Xius Core.
+**Compatibility:** World of Warcraft Forever (TOC `16001`) and modern retail (TOC `120100`, `120105`, `120107`). Requires Xius Core.
 
 ## More From Xius
 

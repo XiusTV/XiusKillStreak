@@ -12,9 +12,9 @@
     a secret value.
 ]]
 
-local _, ns = ...
+local addonName, ns = ...
 
-local XiusCore = _G.XiusCore or _G.XiusUI or _G.XiusCoreSettingsLib
+local XiusCore = _G.XiusCore or _G.XiusCoreSettingsLib
 if not XiusCore and C_AddOns and C_AddOns.IsAddOnLoaded then
     local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, "XiusCore")
     XiusCore = ok and loaded and true or false
@@ -35,20 +35,22 @@ ns.recentKills = {}
 ns.targetAliveAt = nil
 ns.targetName = nil
 ns.targetGUID = nil
+ns.targetIsPlayer = nil
+ns.targetIsTrivial = nil
+ns.inPvPInstance = false
 ns.inCombat = false
 ns.lastCombatAt = 0
 ns.lastQuestTurnin = 0
-ns.lastXPAt = 0
-ns.lastCountedAt = 0
-ns.lastCountedName = nil
-ns.pendingNameless = nil
 ns.soundHandle = nil
 
 local pcall = pcall
 local type = type
+local pairs = pairs
 local tostring = tostring
 local tonumber = tonumber
 local print = print
+local math_floor = math.floor
+local math_max = math.max
 local string_find = string.find
 local string_format = string.format
 local string_gsub = string.gsub
@@ -61,7 +63,37 @@ local table_remove = table.remove
 
 local CORRELATE_WINDOW = 0.35
 local GUID_WINDOW = 5.0
-local SOUND_CHANNELS = { "Master", "Dialog", "SFX" }
+local MAX_RECENT_KILLS = 64
+local SOUND_CHANNEL_ORDER = {
+    Master = { "Master", "Dialog", "SFX" },
+    SFX = { "SFX", "Master", "Dialog" },
+    Dialog = { "Dialog", "Master", "SFX" },
+    Ambience = { "Ambience", "Master", "SFX" },
+    Music = { "Music", "Master", "SFX" },
+}
+local SOUND_VOLUME_CVARS = {
+    Master = "Sound_MasterVolume",
+    SFX = "Sound_SFXVolume",
+    Dialog = "Sound_DialogVolume",
+    Ambience = "Sound_AmbienceVolume",
+    Music = "Sound_MusicVolume",
+}
+local VALID_ANNOUNCE_CHANNELS = {
+    SELF = true,
+    EMOTE = true,
+    SAY = true,
+    YELL = true,
+    PARTY = true,
+    RAID = true,
+}
+local VALID_EMOTE_TOKENS = {
+    ROAR = true,
+    CHEER = true,
+    VICTORY = true,
+    FLEX = true,
+    CHARGE = true,
+    LAUGH = true,
+}
 local SOURCE_KEYS = { "XP", "GENERIC", "KB", "HONOR", "SLAIN", "PARTYKILL", "TARGET" }
 local recordPool = {}
 
@@ -106,6 +138,8 @@ local function AcquireRecord()
     return { sources = {} }
 end
 
+local RECORD_POOL_CAP = 64
+
 local function ReleaseRecord(rec)
     if type(rec) ~= "table" then
         return
@@ -117,6 +151,9 @@ local function ReleaseRecord(rec)
         rec.sources = {}
     else
         ClearSources(rec.sources)
+    end
+    if #recordPool >= RECORD_POOL_CAP then
+        return
     end
     recordPool[#recordPool + 1] = rec
 end
@@ -176,15 +213,11 @@ local function ShortName(name)
     if not name then
         return nil
     end
-    name = Trim(name)
-    if name == "" then
-        return nil
-    end
-    local short = string_match(name, "^([^%-]+)")
+    local short = string_match(name, "^%s*([^%-]-)%s*$")
     if short and short ~= "" then
         return short
     end
-    return name
+    return nil
 end
 
 local function SafeText(value)
@@ -287,32 +320,228 @@ function ns:Print(text)
     print("Xius Kill Streak: " .. tostring(text))
 end
 
-function ns:InitDB()
-    if type(XiusKillStreakDB) ~= "table" then
-        XiusKillStreakDB = {}
+local function AdoptCoreDB()
+    if type(XiusUIDB) ~= "table" then
+        return
     end
-    local db = XiusKillStreakDB
+    local profile = XiusUIDB.killstreak
+    if type(profile) ~= "table" then
+        profile = {}
+        XiusUIDB.killstreak = profile
+    end
+    local saved = XiusKillStreakDB
+    if type(saved) ~= "table" then
+        XiusKillStreakDB = profile
+        return
+    end
+    if saved == profile then
+        return
+    end
+    XiusUIDB.killstreak = saved
+    XiusKillStreakDB = saved
+end
+
+local function SanitizeDB(db)
+    local defaults = ns.DEFAULTS or {}
     if db.enabled == nil then
-        db.enabled = true
-    end
-    if db.sound == nil then
-        db.sound = true
+        db.enabled = defaults.enabled ~= false
     end
     if db.unlocked == nil then
         db.unlocked = false
     end
+    if db.trackPvE == nil then
+        db.trackPvE = true
+    end
+    if db.trackPvP == nil then
+        db.trackPvP = true
+    end
+    if db.ignoreGray == nil then
+        db.ignoreGray = false
+    end
+    local timer = ns.PlainNumber(db.resetTimer)
+    if not timer then
+        timer = defaults.resetTimer or 25
+    end
+    if timer < 5 then
+        timer = 5
+    elseif timer > 60 then
+        timer = 60
+    end
+    db.resetTimer = math_floor(timer + 0.5)
+
+    local scale = ns.PlainNumber(db.bannerScale) or ns.PlainNumber(db.fontScale) or 1
+    if scale < 0.5 then
+        scale = 0.5
+    elseif scale > 2.0 then
+        scale = 2.0
+    end
+    db.bannerScale = scale
+    db.fontScale = scale
+
+    local preview = ns.PlainNumber(db.previewTier)
+    if not preview or preview < 1 or preview > #ns.tiers then
+        preview = #ns.tiers
+    end
+    db.previewTier = math_floor(preview + 0.5)
+
+    if db.sound == nil then
+        db.sound = true
+    end
+    if not SOUND_CHANNEL_ORDER[db.soundChannel] then
+        db.soundChannel = "Master"
+    end
+    local vol = ns.PlainNumber(db.soundVolume)
+    if not vol then
+        vol = 100
+    end
+    if vol < 0 then
+        vol = 0
+    elseif vol > 100 then
+        vol = 100
+    end
+    db.soundVolume = math_floor(vol + 0.5)
+
+    if db.chatAnnounce == nil then
+        db.chatAnnounce = false
+    end
+    if not VALID_ANNOUNCE_CHANNELS[db.announceChannel] then
+        db.announceChannel = "SELF"
+    end
+    if db.emoteAnnounce == nil then
+        db.emoteAnnounce = false
+    end
+    if not VALID_EMOTE_TOKENS[db.emoteToken] then
+        db.emoteToken = "ROAR"
+    end
+
+    if type(db.tiers) ~= "table" then
+        db.tiers = {}
+    end
+    for i = 1, #ns.tiers do
+        if db.tiers[i] == nil then
+            db.tiers[i] = true
+        else
+            db.tiers[i] = db.tiers[i] and true or false
+        end
+    end
+end
+
+function ns:InitDB()
+    AdoptCoreDB()
+    if type(XiusKillStreakDB) ~= "table" then
+        XiusKillStreakDB = {}
+        if type(XiusUIDB) == "table" then
+            XiusUIDB.killstreak = XiusKillStreakDB
+        end
+    end
+    self.db = XiusKillStreakDB
+    SanitizeDB(self.db)
+end
+
+function ns:SyncProfileDB()
+    if type(XiusUIDB) == "table" and type(XiusUIDB.killstreak) == "table" then
+        if self.db ~= XiusUIDB.killstreak then
+            self.db = XiusUIDB.killstreak
+        end
+        if XiusKillStreakDB ~= XiusUIDB.killstreak then
+            XiusKillStreakDB = XiusUIDB.killstreak
+        end
+    end
+    if type(XiusKillStreakDB) ~= "table" then
+        XiusKillStreakDB = {}
+    end
+    self.db = XiusKillStreakDB
+    SanitizeDB(self.db)
+end
+
+function ns:ApplySettings()
+    self:SyncProfileDB()
+    if not self.db.enabled then
+        self:StopSound()
+        self:ResetStreak()
+        if self.FinishBanner and not self.db.unlocked then
+            self:FinishBanner()
+        end
+    end
+    if self.ApplyBannerScale then
+        self:ApplyBannerScale()
+    end
+    if self.ApplyBannerPosition then
+        self:ApplyBannerPosition()
+    end
+    if self.ApplyCounterPosition then
+        self:ApplyCounterPosition()
+    end
+    if self.UpdateLock then
+        self:UpdateLock()
+    end
+    if self.UpdateCounter then
+        self:UpdateCounter()
+    end
+end
+
+function ns:IsTierEnabled(index)
+    local db = XiusKillStreakDB
+    if not db or type(db.tiers) ~= "table" then
+        return true
+    end
+    return db.tiers[index] ~= false
+end
+
+function ns:SetTierEnabled(index, value)
+    if type(XiusKillStreakDB) ~= "table" then
+        self:InitDB()
+    end
+    if type(XiusKillStreakDB.tiers) ~= "table" then
+        XiusKillStreakDB.tiers = {}
+    end
+    XiusKillStreakDB.tiers[index] = value and true or false
+end
+
+function ns:SetSoundVolume(percent, applyCVar)
+    if type(XiusKillStreakDB) ~= "table" then
+        self:InitDB()
+    end
+    local vol = ns.PlainNumber(percent) or 100
+    if vol < 0 then
+        vol = 0
+    elseif vol > 100 then
+        vol = 100
+    end
+    vol = math_floor(vol + 0.5)
+    XiusKillStreakDB.soundVolume = vol
+    -- Never write Sound_*Volume CVars: the slider is addon-local gain only.
+end
+
+function ns:UpdateInstanceState()
+    self.inPvPInstance = false
+    if type(IsInInstance) == "function" then
+        local ok, inInstance, instanceType = pcall(IsInInstance)
+        if ok and not IsSecret(inInstance) and not IsSecret(instanceType) and inInstance == true then
+            if instanceType == "pvp" or instanceType == "arena" then
+                self.inPvPInstance = true
+            end
+        end
+    end
 end
 
 function ns:CurrentWindow()
+    local db = XiusKillStreakDB
+    local base = ns.PlainNumber(db and db.resetTimer) or self.BASE_COUNTDOWN or 25
+    if base < 5 then
+        base = 5
+    elseif base > 60 then
+        base = 60
+    end
     local config = ns.tiers
     local index = self.firedTier
     if index and index > 0 and config[index] and config[index].countdown then
-        return config[index].countdown
+        if base == 25 then
+            return config[index].countdown
+        end
+        return math_max(2, math_floor((config[index].countdown * (base / 25)) + 0.5))
     end
-    if self.BASE_COUNTDOWN then
-        return self.BASE_COUNTDOWN
-    end
-    return 25
+    return base
 end
 
 function ns:ResetStreak()
@@ -323,8 +552,8 @@ function ns:ResetStreak()
     self.targetAliveAt = nil
     self.targetName = nil
     self.targetGUID = nil
-    self.pendingNameless = nil
-    self.lastCountedName = nil
+    self.targetIsPlayer = nil
+    self.targetIsTrivial = nil
     if self.UpdateCounter then
         self:UpdateCounter()
     end
@@ -397,28 +626,33 @@ function ns:PruneRecent(now)
     end
 end
 
-function ns:QueueNameless(source)
-    self:CreditKill(nil, nil, source or "GENERIC")
+local function IsKillPvP(self, guid, source, isPlayerHint)
+    if source == "HONOR" then
+        return true
+    end
+    if source == "XP" then
+        return false
+    end
+    if guid then
+        if string_find(guid, "^Player%-") then
+            return true
+        end
+        if string_find(guid, "^Creature%-") or string_find(guid, "^Pet%-") or string_find(guid, "^Vehicle%-") then
+            return false
+        end
+    end
+    if isPlayerHint ~= nil then
+        return isPlayerHint == true
+    end
+    if self.inPvPInstance then
+        return true
+    end
+    return false
 end
 
-function ns:FlushPending()
-    local pending = self.pendingNameless
-    if type(pending) ~= "table" then
-        self.pendingNameless = nil
-        return
-    end
-    self.pendingNameless = nil
-    local count = pending.count or 1
-    if count > 8 then
-        count = 8
-    end
-    for _ = 1, count do
-        self:CreditKill(nil, nil, "GENERIC", pending.at)
-    end
-end
-
-function ns:CreditKill(name, guid, source, happened)
-    if not XiusKillStreakDB or not XiusKillStreakDB.enabled then
+function ns:CreditKill(name, guid, source, happened, isPlayerHint, isTrivialHint)
+    local db = XiusKillStreakDB
+    if not db or not db.enabled then
         return
     end
     if PlainBool(UnitIsDeadOrGhost, "player") == true then
@@ -437,10 +671,8 @@ function ns:CreditKill(name, guid, source, happened)
         happened = now
     end
 
-    local fromXP = false
     if source == true or source == "XP" then
         source = "XP"
-        fromXP = true
     elseif type(source) ~= "string" or source == "" then
         source = "GENERIC"
     end
@@ -449,6 +681,22 @@ function ns:CreditKill(name, guid, source, happened)
     guid = PublicString(guid)
     if (name and self:NameIsSelf(name)) or (guid and self:GuidIsSelf(guid)) then
         return
+    end
+
+    local isPvP = IsKillPvP(self, guid, source, isPlayerHint)
+    if isPvP then
+        if db.trackPvP == false then
+            return
+        end
+    else
+        if db.trackPvE == false then
+            return
+        end
+        if db.ignoreGray and source ~= "XP" then
+            if isTrivialHint == true or (isTrivialHint == nil and PlainBool(UnitIsTrivial, "target") == true) then
+                return
+            end
+        end
     end
 
     self:PruneRecent(now)
@@ -490,13 +738,14 @@ function ns:CreditKill(name, guid, source, happened)
                         rec.guid = guid
                     end
                     rec.sources[source] = true
-                    if fromXP then
-                        self.lastXPAt = now
-                    end
                     return
                 end
             end
         end
+    end
+
+    while #recent >= MAX_RECENT_KILLS do
+        ReleaseRecord(table_remove(recent, 1))
     end
 
     local rec = AcquireRecord()
@@ -505,12 +754,6 @@ function ns:CreditKill(name, guid, source, happened)
     rec.guid = guid
     rec.sources[source] = true
     recent[#recent + 1] = rec
-
-    if fromXP then
-        self.lastXPAt = now
-    end
-    self.lastCountedAt = now
-    self.lastCountedName = name
 
     local window = self:CurrentWindow()
     if self.streak > 0 and previousKill and (happened - previousKill) <= window then
@@ -531,48 +774,122 @@ end
 
 local function TryPlaySoundFile(self, file, channel)
     local ok, first, second = pcall(PlaySoundFile, file, channel)
-    if not ok or IsSecret(first) or IsSecret(second) then
+    if not ok then
         return false
     end
+    -- Secret or boolean-only success still means audio started; do not fall through to another channel.
+    if IsSecret(first) or IsSecret(second) then
+        return true
+    end
     if first == true then
-        if type(second) == "number" then
+        if type(second) == "number" and second > 0 then
             self.soundHandle = second
         end
         return true
     end
-    if type(first) == "number" then
+    if type(first) == "number" and first > 0 then
         self.soundHandle = first
+        return true
+    end
+    -- Void success: the file already played. Do not retry other channels or slash paths.
+    if first == nil and second == nil then
         return true
     end
     return false
 end
 
-function ns:PlaySound(path, force)
+function ns:PlaySound(path, force, forwardPath)
     if not path or path == "" or not PlaySoundFile then
         return
     end
-    if not force and not (XiusKillStreakDB and XiusKillStreakDB.sound) then
-        return
+    local db = XiusKillStreakDB
+    if not force then
+        if not (db and db.sound) then
+            return
+        end
+        local volume = ns.PlainNumber(db.soundVolume)
+        if volume ~= nil and volume <= 0 then
+            return
+        end
     end
 
     self:StopSound()
 
-    local forward = string_gsub(path, "\\", "/")
-    for j = 1, #SOUND_CHANNELS do
-        if TryPlaySoundFile(self, path, SOUND_CHANNELS[j]) then
+    local channels = SOUND_CHANNEL_ORDER[db and db.soundChannel or "Master"] or SOUND_CHANNEL_ORDER.Master
+    for j = 1, #channels do
+        if TryPlaySoundFile(self, path, channels[j]) then
             return
         end
     end
+    local forward = forwardPath or string_gsub(path, "\\", "/")
     if forward ~= path then
-        for j = 1, #SOUND_CHANNELS do
-            if TryPlaySoundFile(self, forward, SOUND_CHANNELS[j]) then
+        for j = 1, #channels do
+            if TryPlaySoundFile(self, forward, channels[j]) then
                 return
             end
         end
     end
 
     if force then
-        self:Print("The sound did not play. Turn up the Master volume, then try again.")
+        self:Print("The sound did not play. Turn up the selected sound channel volume, then try again.")
+    end
+end
+
+function ns:SendTierAnnouncement(tier, streakCount)
+    local db = XiusKillStreakDB
+    if not db or not tier then
+        return
+    end
+    local count = streakCount or tier.streakCount or 0
+    local title = tier.title or "Kill Streak"
+
+    if db.chatAnnounce then
+        local msg = string_format("%s! (%d Kill Streak)", title, count)
+        local channel = db.announceChannel or "SELF"
+        if channel == "SELF" or type(SendChatMessage) ~= "function" then
+            self:Print(msg)
+        elseif channel == "PARTY" then
+            if PlainBool(IsInGroup) == true then
+                local ok = pcall(SendChatMessage, msg, "PARTY")
+                if not ok then
+                    self:Print(msg)
+                end
+            else
+                self:Print(msg)
+            end
+        elseif channel == "RAID" then
+            local targetChat
+            if LE_PARTY_CATEGORY_INSTANCE and PlainBool(IsInGroup, LE_PARTY_CATEGORY_INSTANCE) == true then
+                targetChat = "INSTANCE_CHAT"
+            elseif PlainBool(IsInRaid) == true then
+                targetChat = "RAID"
+            elseif PlainBool(IsInGroup) == true then
+                targetChat = "PARTY"
+            end
+            if targetChat then
+                local ok = pcall(SendChatMessage, msg, targetChat)
+                if not ok then
+                    self:Print(msg)
+                end
+            else
+                self:Print(msg)
+            end
+        elseif channel == "EMOTE" or channel == "SAY" or channel == "YELL" then
+            local ok = pcall(SendChatMessage, msg, channel)
+            if not ok then
+                self:Print(msg)
+            end
+        else
+            self:Print(msg)
+        end
+    end
+
+    if db.emoteAnnounce and type(DoEmote) == "function" then
+        local token = db.emoteToken
+        if not VALID_EMOTE_TOKENS[token] then
+            token = "ROAR"
+        end
+        pcall(DoEmote, token, "none")
     end
 end
 
@@ -580,10 +897,12 @@ function ns:AnnounceTier(tier, streakCount)
     if not tier then
         return
     end
-    local title = string_upper(tier.title or "")
-    local sub = string_format("%d KILL STREAK!", streakCount or tier.streakCount or 0)
+    local count = streakCount or tier.streakCount or 0
+    local title = tier.upperTitle or string_upper(tier.title or "")
+    local sub = (count == tier.streakCount and tier.testSub) or string_format("%d KILL STREAK!", count)
     self:ShowBanner(title, sub)
-    self:PlaySound(tier.sound, false)
+    self:PlaySound(tier.sound, false, tier.soundForward)
+    self:SendTierAnnouncement(tier, count)
 end
 
 function ns:AnnounceIfNeeded()
@@ -601,7 +920,12 @@ function ns:AnnounceIfNeeded()
     end
     if index > reached then
         self.firedTier = index
-        self:AnnounceTier(config[index], self.streak)
+        for t = index, reached + 1, -1 do
+            if self:IsTierEnabled(t) then
+                self:AnnounceTier(config[t], self.streak)
+                break
+            end
+        end
     end
 end
 
@@ -796,17 +1120,39 @@ function ns:OnPartyKill(attackerGUID, targetGUID)
     end
 end
 
+local function ClearTargetState(self)
+    self.targetAliveAt = nil
+    self.targetName = nil
+    self.targetGUID = nil
+    self.targetIsPlayer = nil
+    self.targetIsTrivial = nil
+end
+
 function ns:WatchTarget(fromTargetChange)
-    if PlainBool(UnitExists, "target") ~= true then
-        self.targetAliveAt = nil
-        self.targetName = nil
-        self.targetGUID = nil
+    if not TrackingEnabled() then
         return
     end
+    if PlainBool(UnitExists, "target") ~= true then
+        ClearTargetState(self)
+        return
+    end
+
+    local isDead = PlainBool(UnitIsDeadOrGhost, "target")
+    if isDead == nil then
+        return
+    end
+
+    -- Fast path: target is still alive and already tracked from PLAYER_TARGET_CHANGED.
+    if not isDead and not fromTargetChange and self.targetAliveAt then
+        return
+    end
+
     if PlainBool(UnitIsUnit, "target", "player") ~= false then
-        self.targetAliveAt = nil
-        self.targetName = nil
-        self.targetGUID = nil
+        ClearTargetState(self)
+        return
+    end
+
+    if UnitIsFeignDeath and PlainBool(UnitIsFeignDeath, "target") == true then
         return
     end
 
@@ -814,47 +1160,22 @@ function ns:WatchTarget(fromTargetChange)
     if not now then
         return
     end
-    local dead = PlainBool(UnitIsDead, "target")
-    local ghost = PlainBool(UnitIsDeadOrGhost, "target")
-    if dead == nil and ghost == nil then
-        return
-    end
-    if UnitIsFeignDeath and PlainBool(UnitIsFeignDeath, "target") == true then
-        return
-    end
-
-    local isDead = (dead == true) or (ghost == true)
-    if not isDead and self.targetAliveAt and self.targetGUID then
-        local sameGuid = PlainString(UnitGUID, "target")
-        if sameGuid and sameGuid == self.targetGUID then
-            return
-        end
-    end
-    local name, guid = UnitIdentity("target")
 
     if not isDead then
         if PlainBool(UnitCanAttack, "player", "target") ~= true then
-            self.targetAliveAt = nil
-            self.targetName = nil
-            self.targetGUID = nil
+            ClearTargetState(self)
             return
         end
         if UnitIsTapDenied and PlainBool(UnitIsTapDenied, "target") == true then
-            self.targetAliveAt = nil
-            self.targetName = nil
-            self.targetGUID = nil
+            ClearTargetState(self)
             return
         end
-        if self.targetAliveAt and ((guid and guid == self.targetGUID) or (not guid and name and name == self.targetName)) then
-            return
-        end
+        local name, guid = UnitIdentity("target")
         self.targetAliveAt = now
-        if name then
-            self.targetName = name
-        end
-        if guid then
-            self.targetGUID = guid
-        end
+        self.targetName = name
+        self.targetGUID = guid
+        self.targetIsPlayer = PlainBool(UnitIsPlayer, "target")
+        self.targetIsTrivial = UnitIsTrivial and PlainBool(UnitIsTrivial, "target") or nil
         if StartTicker then
             StartTicker()
         end
@@ -863,24 +1184,26 @@ function ns:WatchTarget(fromTargetChange)
 
     -- Never credit a unit that was already dead when the player first targeted it.
     if fromTargetChange then
-        self.targetAliveAt = nil
-        self.targetName = nil
-        self.targetGUID = nil
+        ClearTargetState(self)
         return
     end
 
     local seen = self.targetAliveAt
     local savedName = self.targetName
     local savedGUID = self.targetGUID
-    self.targetAliveAt = nil
-    self.targetName = nil
-    self.targetGUID = nil
+    local savedIsPlayer = self.targetIsPlayer
+    local savedIsTrivial = self.targetIsTrivial
+    ClearTargetState(self)
 
+    if not PlainStamp(seen) then
+        return
+    end
+    local name, guid = UnitIdentity("target")
     if savedGUID and guid and savedGUID ~= guid then
         return
     end
-    if PlainStamp(seen) and self:IsCombatActive(now) then
-        self:CreditKill(name or savedName, guid or savedGUID, "TARGET")
+    if self:IsCombatActive(now) then
+        self:CreditKill(name or savedName, guid or savedGUID, "TARGET", nil, savedIsPlayer, savedIsTrivial)
     end
 end
 
@@ -894,10 +1217,10 @@ function ns:Test(index)
         self:Print("Use /xks test for Toasty, or /xks test 1 through 10.")
         return
     end
-    local title = string_upper(tier.title or "")
-    local sub = string_format("%d KILL STREAK!", tier.streakCount or index)
+    local title = tier.upperTitle or string_upper(tier.title or "")
+    local sub = tier.testSub or string_format("%d KILL STREAK!", tier.streakCount or index)
     self:ShowBanner(title, sub)
-    self:PlaySound(tier.sound, true)
+    self:PlaySound(tier.sound, true, tier.soundForward)
 end
 
 function ns:HandleSlash(message)
@@ -987,20 +1310,19 @@ function ns:OnLoaded()
     self.firedTier = 0
     self.lastKillAt = nil
     WipeRecords(self.recentKills)
-    self.targetAliveAt = nil
-    self.targetName = nil
-    self.targetGUID = nil
+    ClearTargetState(self)
     self.inCombat = PlainBool(UnitAffectingCombat, "player") == true
     self.lastCombatAt = self.inCombat and (Now() or 0) or 0
     self.lastQuestTurnin = 0
-    self.lastXPAt = 0
-    self.lastCountedAt = 0
-    self.lastCountedName = nil
-    self.pendingNameless = nil
     self.playerName = ShortName(PlainString(UnitName, "player"))
     self.playerGUID = PlainString(UnitGUID, "player")
+    self:UpdateInstanceState()
     self:CreateBanner()
     self:CreateCounter()
+    if self.RegisterMovers then
+        self:RegisterMovers()
+    end
+    self:ApplyBannerScale()
     self:ApplyBannerPosition()
     self:ApplyCounterPosition()
     self.loaded = true
@@ -1076,8 +1398,7 @@ local function TickerOnUpdate(self, elapsed)
         self:SetScript("OnUpdate", nil)
         return
     end
-    elapsed = ns.PlainNumber(elapsed)
-    if not elapsed or elapsed < 0 then
+    if type(elapsed) ~= "number" or elapsed < 0 then
         return
     end
     if elapsed > 1 then
@@ -1095,12 +1416,8 @@ local function TickerOnUpdate(self, elapsed)
     end
     local hasStreak = ns.streak and ns.streak > 0
     local hasRecent = #ns.recentKills > 0
-    local hasPending = ns.pendingNameless ~= nil
     local combatActive = ns:IsCombatActive(now)
 
-    if hasPending then
-        ns:FlushPending()
-    end
     if hasStreak then
         if PlainBool(UnitIsDeadOrGhost, "player") == true then
             ns:ResetStreak()
@@ -1114,14 +1431,14 @@ local function TickerOnUpdate(self, elapsed)
         ns:PruneRecent(now)
         hasRecent = #ns.recentKills > 0
     end
-    if combatActive or ns.targetAliveAt then
+    if ns.targetAliveAt then
         ns:WatchTarget(false)
     end
     if hasStreak or (XiusKillStreakDB and XiusKillStreakDB.unlocked) then
         ns:UpdateCounter()
     end
 
-    if not hasStreak and not hasRecent and ns.pendingNameless == nil and not combatActive and not ns.targetAliveAt then
+    if not hasStreak and not hasRecent and not combatActive and not ns.targetAliveAt then
         self.tickerActive = false
         self:SetScript("OnUpdate", nil)
     end
@@ -1165,6 +1482,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
     elseif event == "PLAYER_ENTERING_WORLD" then
         ns.playerName = ShortName(PlainString(UnitName, "player")) or ns.playerName
         ns.playerGUID = PlainString(UnitGUID, "player") or ns.playerGUID
+        ns:UpdateInstanceState()
     elseif event == "COMBAT_TEXT_UPDATE" then
         ns:OnCombatText(arg1, arg2)
     elseif event == "CHAT_MSG_COMBAT_HOSTILE_DEATH" then
@@ -1181,9 +1499,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
             ns.lastQuestTurnin = now
         end
     elseif event == "PLAYER_TARGET_CHANGED" then
-        ns.targetAliveAt = nil
-        ns.targetName = nil
-        ns.targetGUID = nil
+        ClearTargetState(ns)
         ns:WatchTarget(true)
     elseif event == "PLAYER_REGEN_DISABLED" then
         ns.inCombat = true
@@ -1217,6 +1533,13 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
         end
     end
 end)
+
+do
+    local core = _G.XiusCore
+    if core and core.RegisterModule then
+        core:RegisterModule("KillStreak", ns)
+    end
+end
 
 SLASH_XIUSKILLSTREAK1 = "/xks"
 SLASH_XIUSKILLSTREAK2 = "/xiuskillstreak"

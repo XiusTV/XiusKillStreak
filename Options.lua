@@ -1,13 +1,12 @@
 --[[
-    Registers Kill Streak with the settings window from XiusCore.
+    Registers Kill Streak with the settings window from XiusCore using top sub-tabs:
+    General and Audio & Announcements.
     This file does not build a window. XiusCore owns the chrome.
-    The page title is already "Kill Streak", so this page does not
-    repeat that name as a section header.
 ]]
 
-local _, ns = ...
+local addonName, ns = ...
 
-local XiusCore = _G.XiusCore or _G.XiusUI or _G.XiusCoreSettingsLib
+local XiusCore = _G.XiusCore or _G.XiusCoreSettingsLib
 if not XiusCore and C_AddOns and C_AddOns.IsAddOnLoaded then
     local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, "XiusCore")
     XiusCore = ok and loaded and true or false
@@ -20,91 +19,72 @@ if not XiusCore then
     return
 end
 
-local SUBTITLE = "Tracks consecutive killing blows on mobs and enemy players with Unreal-style banners and sounds."
+local type = type
+local tonumber = tonumber
+local tostring = tostring
+local math_floor = math.floor
+local string_format = string.format
 
-local TIP_ENABLE = "Count killing blows on mobs and enemy players. Turning off clears the current streak."
-local TIP_SOUND = "Play the announcer voice on each tier. Test Banner always plays sound."
-local TIP_UNLOCK = "Drag the banner or streak counter to move; drag the counter corner to resize."
+local SUB_TABS = {
+    { id = "general", text = "General" },
+    { id = "audio", text = "Audio & Announcements" },
+}
 
-local TIER_SUMMARY = "First kill starts a 25s window; each tier below sets the timer to reach the next kill (/xks test | /xks unlock):"
-local TIER_LINES = table.concat({
-    "2: Double Kill (22s)  •  3: Triple Kill (18s)  •  5: Multi Kill (15s)",
-    "8: Mega Kill (12s)  •  12: Ultra Kill (10s)  •  16: Monster Kill (8s)",
-    "20: Godlike (6s)  •  25: Holy Shit (5s)  •  30: Finish Him (4s)  •  40: Toasty (3s)",
-}, "\n")
-local TIER_BLOCK = TIER_SUMMARY .. "\n" .. TIER_LINES
+local SOUND_CHANNEL_ITEMS = {
+    { value = "Master", text = "Master" },
+    { value = "SFX", text = "SFX (Sound Effects)" },
+    { value = "Dialog", text = "Dialog" },
+    { value = "Ambience", text = "Ambience" },
+    { value = "Music", text = "Music" },
+}
 
-local function LineCount(text)
-    local lines = 0
-    local start = 1
-    local len = string.len(text)
-    if len < 1 then
-        return 1
-    end
-    while start <= len do
-        local stop = string.find(text, "\n", start, true)
-        local chunkEnd = stop or (len + 1)
-        local chunk = chunkEnd - start
-        if chunk < 1 then
-            chunk = 1
-        end
-        lines = lines + math.ceil(chunk / 88)
-        if not stop then
-            break
-        end
-        start = stop + 1
-        if start > len then
-            break
-        end
-    end
-    if lines < 1 then
-        lines = 1
-    end
-    return lines
-end
+local ANNOUNCE_CHANNEL_ITEMS = {
+    { value = "SELF", text = "Local Chat (Self Only)" },
+    { value = "EMOTE", text = "Custom Emote (/e)" },
+    { value = "SAY", text = "Say (/s)" },
+    { value = "YELL", text = "Yell (/y)" },
+    { value = "PARTY", text = "Party (/p)" },
+    { value = "RAID", text = "Raid / Instance (/ra, /i)" },
+}
 
-local function NoteFont(row)
-    local regions = { row:GetRegions() }
-    for i = 1, #regions do
-        local region = regions[i]
-        if region.GetText and region.GetStringHeight then
-            return region
-        end
-    end
-end
+local EMOTE_ITEMS = {
+    { value = "ROAR", text = "Roar (/roar)" },
+    { value = "CHEER", text = "Cheer (/cheer)" },
+    { value = "VICTORY", text = "Victory (/victory)" },
+    { value = "FLEX", text = "Flex (/flex)" },
+    { value = "CHARGE", text = "Charge (/charge)" },
+    { value = "LAUGH", text = "Laugh (/laugh)" },
+}
 
-local function FitNote(row, text)
-    if not row then
-        return
+local PREVIEW_TIER_ITEMS = {}
+do
+    local tiers = ns.tiers or {}
+    for i = 1, #tiers do
+        local tier = tiers[i]
+        PREVIEW_TIER_ITEMS[i] = {
+            value = i,
+            text = string_format("%d. %s (%d kills)", i, tier.title or "Tier", tier.streakCount or i),
+        }
     end
-    local font = NoteFont(row)
-    local function Apply()
-        local height = 8 + (LineCount(text) * 15)
-        if font and font.GetStringHeight then
-            local measured = font:GetStringHeight()
-            if type(measured) == "number" and measured > 1 and (measured + 8) > height then
-                height = measured + 8
-            end
-        end
-        if height < 22 then
-            height = 22
-        end
-        row.rowHeight = height
-        row:SetHeight(height)
-    end
-    row.Reflow = Apply
-    Apply()
 end
 
 local function DB()
     if type(XiusKillStreakDB) ~= "table" then
-        XiusKillStreakDB = {}
+        if ns.InitDB then
+            ns:InitDB()
+        else
+            XiusKillStreakDB = {}
+        end
     end
     return XiusKillStreakDB
 end
 
-local function Flag(key)
-    return DB()[key] and true or false
+local function Flag(key, defaultOn)
+    local value = DB()[key]
+    if value == nil then
+        return defaultOn and true or false
+    end
+    return value and true or false
 end
 
 local function SettingsLib()
@@ -153,18 +133,55 @@ function ns:SetUnlocked(value)
     if self.syncing then
         return
     end
-    DB().unlocked = value and true or false
+    local nextState = value and true or false
+    if DB().unlocked == nextState then
+        return
+    end
+    DB().unlocked = nextState
     if self.UpdateLock then
         self:UpdateLock()
     end
 end
 
 local function ApplyDefaults()
-    ns:SetEnabled(true)
-    ns:SetSoundEnabled(true)
-    ns:SetUnlocked(false)
+    local db = DB()
+    local defaults = ns.DEFAULTS or {}
+    db.enabled = true
+    db.unlocked = false
+    db.trackPvE = true
+    db.trackPvP = true
+    db.ignoreGray = false
+    db.resetTimer = defaults.resetTimer or 25
+    db.bannerScale = 1
+    db.fontScale = 1
+    db.previewTier = #(ns.tiers or {})
+    if db.previewTier < 1 then
+        db.previewTier = 10
+    end
+    db.sound = true
+    db.soundChannel = "Master"
+    db.soundVolume = 100
+    db.chatAnnounce = false
+    db.announceChannel = "SELF"
+    db.emoteAnnounce = false
+    db.emoteToken = "ROAR"
+    if type(db.tiers) ~= "table" then
+        db.tiers = {}
+    end
+    for i = 1, #(ns.tiers or {}) do
+        db.tiers[i] = true
+    end
+    if ns.ApplySettings then
+        ns:ApplySettings()
+    else
+        ns:SetEnabled(true)
+        ns:SetSoundEnabled(true)
+        ns:SetUnlocked(false)
+    end
     RefreshPage()
 end
+
+ns.ResetDefaults = ApplyDefaults
 
 local function UnlockFrames()
     ns:SetUnlocked(true)
@@ -174,9 +191,19 @@ local function UnlockFrames()
     RefreshPage()
 end
 
-local function TestBanner()
+local function TestPreview()
     if ns.Test then
-        ns:Test(10)
+        local tier = tonumber(DB().previewTier) or 10
+        ns:Test(tier)
+    end
+end
+
+local function ClearStreak()
+    if ns.ResetStreak then
+        ns:ResetStreak()
+    end
+    if ns.Print then
+        ns:Print("Streak cleared.")
     end
 end
 
@@ -186,6 +213,201 @@ local function ResetPosition()
     end
     if ns.Print then
         ns:Print("Banner and counter positions reset to default.")
+    end
+    RefreshPage()
+end
+
+local function BuildGeneralTab(_, api)
+    api:AddSection("General")
+    api:AddNote("Tracks consecutive killing blows on mobs and enemy players with Unreal-style banners and announcer calls.")
+    api:AddCheckbox("Enable kill streaks", function()
+        return Flag("enabled", true)
+    end, function(value)
+        ns:SetEnabled(value)
+    end, "Count killing blows on mobs and enemy players. Turning this off clears the current streak.")
+
+    api:AddSection("PvP & PvE Mode Filters")
+    api:AddCheckbox("Track PvE kills (mobs and NPCs)", function()
+        return Flag("trackPvE", true)
+    end, function(value)
+        DB().trackPvE = value and true or false
+    end, "Count killing blows on hostile creatures and NPCs.")
+    api:AddCheckbox("Track PvP kills (enemy players)", function()
+        return Flag("trackPvP", true)
+    end, function(value)
+        DB().trackPvP = value and true or false
+    end, "Count killing blows and honorable kills on enemy players.")
+    api:AddCheckbox("Ignore gray (trivial) mobs", function()
+        return Flag("ignoreGray", false)
+    end, function(value)
+        DB().ignoreGray = value and true or false
+    end, "Skip low-level gray mobs that award no experience. Green or higher mobs and enemy players still count.")
+
+    api:AddSection("Streak Timer")
+    api:AddSlider("Streak reset timer (seconds)", 5, 60, 1, function()
+        return tonumber(DB().resetTimer) or 25
+    end, function(value)
+        local sec = math_floor((tonumber(value) or 25) + 0.5)
+        if sec < 5 then
+            sec = 5
+        elseif sec > 60 then
+            sec = 60
+        end
+        DB().resetTimer = sec
+        if ns.UpdateCounter then
+            ns:UpdateCounter()
+        end
+    end, "Base window after your first kill before the streak expires. Higher tiers tighten proportionally from this value.")
+
+    api:AddSection("Banner Scale & Position")
+    api:AddSlider("Banner scale (%)", 50, 200, 5, function()
+        local scale = ns.GetBannerScale and ns:GetBannerScale() or tonumber(DB().bannerScale) or 1
+        return math_floor((scale * 100) + 0.5)
+    end, function(value)
+        local scale = (tonumber(value) or 100) / 100
+        if scale < 0.5 then
+            scale = 0.5
+        elseif scale > 2.0 then
+            scale = 2.0
+        end
+        DB().bannerScale = scale
+        DB().fontScale = scale
+        if ns.ApplyBannerScale then
+            ns:ApplyBannerScale()
+        end
+    end, "Scales the kill streak banner text and frame from 50% to 200% without shifting its screen position.")
+    api:AddSlider("Banner horizontal offset (X)", -600, 600, 5, function()
+        if ns.GetBannerOffset then
+            local x = ns:GetBannerOffset()
+            return x
+        end
+        return 0
+    end, function(value)
+        if ns.SetBannerOffset then
+            ns:SetBannerOffset(math_floor((tonumber(value) or 0) + 0.5), nil)
+        end
+    end, "Horizontal screen offset for the banner. Dragging while unlocked updates this automatically.")
+    api:AddSlider("Banner vertical offset (Y)", -400, 400, 5, function()
+        if ns.GetBannerOffset then
+            local _, y = ns:GetBannerOffset()
+            return y
+        end
+        return 160
+    end, function(value)
+        if ns.SetBannerOffset then
+            ns:SetBannerOffset(nil, math_floor((tonumber(value) or 160) + 0.5))
+        end
+    end, "Vertical screen offset for the banner. Dragging while unlocked updates this automatically.")
+    api:AddCheckbox("Unlock banner and counter", function()
+        return Flag("unlocked", false)
+    end, function(value)
+        ns:SetUnlocked(value)
+        local Lib = SettingsLib()
+        if not value and Lib and Lib.NoteFramesLocked then
+            Lib:NoteFramesLocked()
+        end
+    end, "Shows a placement preview so you can drag the banner or streak counter, and drag the counter corner to resize.")
+
+    api:AddSection("Test Preview & Actions")
+    api:AddDropdown("Preview tier", PREVIEW_TIER_ITEMS, function()
+        return tonumber(DB().previewTier) or 10
+    end, function(value)
+        DB().previewTier = tonumber(value) or 10
+    end, "Choose which streak tier plays when you click Test Preview.")
+    api:AddButtonGroup({
+        height = 24,
+        spacing = 8,
+        buttons = {
+            {
+                text = "Test Preview",
+                width = 112,
+                onClick = TestPreview,
+            },
+            {
+                text = "Clear Streak",
+                width = 104,
+                onClick = ClearStreak,
+            },
+            {
+                text = "Reset Position",
+                width = 118,
+                onClick = ResetPosition,
+            },
+            {
+                text = "Defaults",
+                width = 96,
+                onClick = ApplyDefaults,
+            },
+        },
+    })
+end
+
+local function BuildAudioTab(_, api)
+    api:AddSection("Sound Effects")
+    api:AddCheckbox("Play streak announcer sounds", function()
+        return Flag("sound", true)
+    end, function(value)
+        ns:SetSoundEnabled(value)
+    end, "Play the announcer voice clip on each enabled tier. Test Preview always plays sound.")
+    api:AddDropdown("Sound channel", SOUND_CHANNEL_ITEMS, function()
+        return DB().soundChannel or "Master"
+    end, function(value)
+        DB().soundChannel = value or "Master"
+    end, "Audio channel used by PlaySoundFile for streak announcer calls.")
+    api:AddSlider("Sound effects volume (%)", 0, 100, 5, function()
+        local vol = tonumber(DB().soundVolume)
+        if vol == nil then
+            return 100
+        end
+        return vol
+    end, function(value)
+        if ns.SetSoundVolume then
+            ns:SetSoundVolume(value)
+        else
+            DB().soundVolume = tonumber(value) or 100
+        end
+    end, "Adjusts announcer volume for streak calls only (0% mutes). Does not change the game's Master/SFX volume.")
+
+    api:AddSection("Chat & Emote Announcements")
+    api:AddCheckbox("Announce streak tiers in chat", function()
+        return Flag("chatAnnounce", false)
+    end, function(value)
+        DB().chatAnnounce = value and true or false
+    end, "Post a callout message when you reach an enabled kill streak tier.")
+    api:AddDropdown("Chat announcement channel", ANNOUNCE_CHANNEL_ITEMS, function()
+        return DB().announceChannel or "SELF"
+    end, function(value)
+        DB().announceChannel = value or "SELF"
+    end, "Destination channel for chat announcements. Falls back to local chat if not in a group or restricted.")
+    api:AddCheckbox("Perform voice emote on streak tier", function()
+        return Flag("emoteAnnounce", false)
+    end, function(value)
+        DB().emoteAnnounce = value and true or false
+    end, "Trigger a character emote when you reach an enabled kill streak tier.")
+    api:AddDropdown("Voice emote", EMOTE_ITEMS, function()
+        return DB().emoteToken or "ROAR"
+    end, function(value)
+        DB().emoteToken = value or "ROAR"
+    end, "Emote performed when voice emote announcements are enabled.")
+
+    api:AddSection("Individual Streak Tiers")
+    api:AddNote("Toggle individual kill streak tiers on or off. Disabled tiers stay silent while the streak counter and timer continue advancing.")
+    local tiers = ns.tiers or {}
+    for i = 1, #tiers do
+        local tier = tiers[i]
+        local tierIndex = i
+        local label = string_format("%d Kills � %s (%ds base timer)", tier.streakCount or i, tier.title or ("Tier " .. tostring(i)), tier.countdown or 25)
+        local tip = string_format("Enable banner, announcer sound, and chat/emote callouts for %s.", tier.title or ("Tier " .. tostring(i)))
+        api:AddCheckbox(label, function()
+            if ns.IsTierEnabled then
+                return ns:IsTierEnabled(tierIndex)
+            end
+            return true
+        end, function(value)
+            if ns.SetTierEnabled then
+                ns:SetTierEnabled(tierIndex, value)
+            end
+        end, tip)
     end
 end
 
@@ -206,74 +428,32 @@ function ns:SetupOptions()
         menuTitle = "Kill Streak",
         group = "Utilities & System",
         order = 60,
+        hidePageTitle = true,
+        activeSubTab = "general",
+        subTabs = SUB_TABS,
         getDB = function()
-            return XiusKillStreakDB
+            return DB()
         end,
-        defaults = {
-            enabled = true,
-            sound = true,
-            unlocked = false,
-        },
+        defaults = ns.DEFAULTS,
         onResetDefaults = ApplyDefaults,
         onUnlock = function(unlocked)
             ns:SetUnlocked(unlocked and true or false)
             RefreshPage()
         end,
         onUnlockFrames = UnlockFrames,
-        buildContent = function(_, api)
-            FitNote(api:AddNote(SUBTITLE), SUBTITLE)
-            api:AddSection("General")
-            api:AddCheckbox("Enable kill streaks", function()
-                return Flag("enabled")
-            end, function(value)
-                ns:SetEnabled(value)
-            end, TIP_ENABLE)
-            api:AddCheckbox("Play streak sounds", function()
-                return Flag("sound")
-            end, function(value)
-                ns:SetSoundEnabled(value)
-            end, TIP_SOUND)
-            api:AddCheckbox("Unlock banner and counter", function()
-                return Flag("unlocked")
-            end, function(value)
-                ns:SetUnlocked(value)
-                local Lib = SettingsLib()
-                if not value and Lib and Lib.NoteFramesLocked then
-                    Lib:NoteFramesLocked()
-                end
-            end, TIP_UNLOCK)
-            api:AddButtonGroup({
-                height = 32,
-                spacing = 8,
-                buttons = {
-                    {
-                        text = "Test Banner",
-                        width = 128,
-                        height = 32,
-                        onClick = TestBanner,
-                    },
-                    {
-                        text = "Reset Position",
-                        width = 140,
-                        height = 32,
-                        onClick = ResetPosition,
-                    },
-                    {
-                        text = "Defaults",
-                        width = 110,
-                        height = 32,
-                        onClick = ApplyDefaults,
-                    },
-                },
-            })
-            api:AddSection("Streak Tiers & Timers")
-            FitNote(api:AddNote(TIER_BLOCK), TIER_BLOCK)
+        buildContent = function(host, api, spec, tabId)
+            local subTab = tabId or (spec and spec.activeSubTab) or "general"
+            if subTab == "audio" then
+                BuildAudioTab(host, api)
+            else
+                BuildGeneralTab(host, api)
+            end
         end,
     })
     self.optionsReady = true
 end
 
-function ns:OpenOptions()
+function ns:OpenOptions(subTab)
     if not self.loaded then
         self:Print("Still loading. Try /xks again in a moment.")
         return
@@ -287,7 +467,7 @@ function ns:OpenOptions()
     end
     local Lib = SettingsLib()
     if Lib and Lib.OpenModule then
-        Lib:OpenModule("KillStreak")
+        Lib:OpenModule("KillStreak", subTab)
         return
     end
     self:Print("Xius Core is required. Enable XiusCore, then type /xks again.")

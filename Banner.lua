@@ -4,9 +4,9 @@
     The counter uses the same metallic gold Blizzard frame as the other Xius HUD plates.
 ]]
 
-local _, ns = ...
+local addonName, ns = ...
 
-local XiusCore = _G.XiusCore or _G.XiusUI or _G.XiusCoreSettingsLib
+local XiusCore = _G.XiusCore or _G.XiusCoreSettingsLib
 if not XiusCore and C_AddOns and C_AddOns.IsAddOnLoaded then
     local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, "XiusCore")
     XiusCore = ok and loaded and true or false
@@ -37,24 +37,11 @@ local type = type
 local CreateFrame = CreateFrame
 
 local layoutQueued = false
-local pendingShow
-
-local function FrameProtected(frame)
-    if not frame or not frame.IsProtected then
-        return false
-    end
-    local ok, protected = pcall(frame.IsProtected, frame)
-    if not ok then
-        return false
-    end
-    if ns.IsSecret(protected) then
-        return true
-    end
-    return protected and true or false
-end
+local pendingTitle
+local pendingSub
 
 local function Defer(frame)
-    if FrameProtected(frame) and ns.InLockdown() then
+    if frame and frame._protected and ns.InLockdown() then
         layoutQueued = true
         return true
     end
@@ -118,6 +105,48 @@ function ns:ApplyFontObject(fontObject, size, primaryPath, secondaryPath)
         pcall(fontObject.SetFont, fontObject, fallback, size, "")
     end
 end
+
+function ns:GetBannerScale()
+    local db = XiusKillStreakDB
+    local scale = ns.PlainNumber(db and (db.bannerScale or db.fontScale)) or 1
+    if scale < 0.5 then
+        scale = 0.5
+    elseif scale > 2.0 then
+        scale = 2.0
+    end
+    return scale
+end
+
+function ns:ApplyBannerScale()
+    local banner = self.banner
+    if not banner then
+        return
+    end
+    local scale = self:GetBannerScale()
+    local w = math_max(360, math_floor((720 * scale) + 0.5))
+    local h = math_max(60, math_floor((120 * scale) + 0.5))
+    if not Defer(banner) then
+        banner:SetSize(w, h)
+    end
+    if banner.content then
+        banner.content:SetSize(w, h)
+    end
+    local titleSize = math_max(18, math_floor((TITLE_SIZE * scale) + 0.5))
+    local subSize = math_max(10, math_floor((SUB_SIZE * scale) + 0.5))
+    if banner.title then
+        self:ApplyFontObject(banner.title, titleSize, self.TITLE_FONT, self.SUB_FONT)
+        banner.title:ClearAllPoints()
+        banner.title:SetPoint("CENTER", banner.content, "CENTER", 0, math_floor((18 * scale) + 0.5))
+    end
+    if banner.sub and banner.title then
+        self:ApplyFontObject(banner.sub, subSize, self.SUB_FONT, self.TITLE_FONT)
+        banner.sub:ClearAllPoints()
+        banner.sub:SetPoint("TOP", banner.title, "BOTTOM", 0, -math_max(2, math_floor((4 * scale) + 0.5)))
+    end
+    self:StyleBannerText()
+end
+
+ns.ApplyFontScale = ns.ApplyBannerScale
 
 local function SetBannerAlpha(banner, alpha)
     if alpha < 0 then
@@ -237,7 +266,8 @@ function ns:CreateBanner()
         return
     end
 
-    local banner = CreateFrame("Frame", "XiusKillStreak_BannerFrame", UIParent)
+    local banner = CreateFrame("Frame", nil, UIParent)
+    banner._protected = false
     banner:SetSize(720, 120)
     banner:SetFrameStrata("HIGH")
     banner:SetFrameLevel(20)
@@ -278,7 +308,7 @@ function ns:CreateBanner()
     banner.sub = sub
 
     self.banner = banner
-    self:StyleBannerText()
+    self:ApplyBannerScale()
     self:SetBannerMouse(false)
     SetBannerAlpha(banner, 0)
 
@@ -317,7 +347,8 @@ function ns:ShowBanner(titleText, subText)
     end
     local banner = self.banner
     if Defer(banner) then
-        pendingShow = { titleText or "", subText or "" }
+        pendingTitle = titleText or ""
+        pendingSub = subText or ""
         return
     end
     banner.title:SetText(titleText or "")
@@ -340,6 +371,7 @@ function ns:FlushLayout()
         return
     end
     layoutQueued = false
+    self:ApplyBannerScale()
     self:ApplyBannerPosition()
     self:ApplyCounterPosition()
     self:UpdateLock()
@@ -347,10 +379,11 @@ function ns:FlushLayout()
     if banner and banner.animating then
         banner:SetScript("OnUpdate", BannerOnUpdate)
     end
-    if pendingShow then
-        local title = pendingShow[1]
-        local sub = pendingShow[2]
-        pendingShow = nil
+    if pendingTitle ~= nil then
+        local title = pendingTitle
+        local sub = pendingSub
+        pendingTitle = nil
+        pendingSub = nil
         self:ShowBanner(title, sub)
     end
 end
@@ -398,6 +431,43 @@ local function ReadPoint(frame)
     return point, relPoint, x, y
 end
 
+function ns:GetBannerOffset()
+    local pos = XiusKillStreakDB and XiusKillStreakDB.bannerPos
+    if type(pos) == "table" then
+        local x = ns.PlainNumber(pos.x)
+        local y = ns.PlainNumber(pos.y)
+        if x ~= nil and y ~= nil then
+            return math_floor(x + 0.5), math_floor(y + 0.5)
+        end
+    end
+    return 0, 160
+end
+
+function ns:SetBannerOffset(x, y)
+    if type(XiusKillStreakDB) ~= "table" then
+        return
+    end
+    local curX, curY = self:GetBannerOffset()
+    local nextX = ns.PlainNumber(x)
+    local nextY = ns.PlainNumber(y)
+    if nextX == nil then
+        nextX = curX
+    end
+    if nextY == nil then
+        nextY = curY
+    end
+    local existing = XiusKillStreakDB.bannerPos
+    local point = (type(existing) == "table" and PlainAnchor(existing.point, "CENTER")) or "CENTER"
+    local relPoint = (type(existing) == "table" and PlainAnchor(existing.relPoint, point)) or point
+    XiusKillStreakDB.bannerPos = {
+        point = point,
+        relPoint = relPoint,
+        x = nextX,
+        y = nextY,
+    }
+    self:ApplyBannerPosition()
+end
+
 function ns:ApplyBannerPosition()
     local banner = self.banner
     if not banner then
@@ -418,9 +488,13 @@ function ns:SaveBannerPosition()
     XiusKillStreakDB.bannerPos = {
         point = point,
         relPoint = relPoint,
-        x = x,
-        y = y,
+        x = math_floor(x + 0.5),
+        y = math_floor(y + 0.5),
     }
+    local Lib = _G.XiusCoreSettingsLib
+    if Lib and Lib.RefreshPage and Lib.frame and Lib.frame:IsShown() and Lib.page == "KillStreak" then
+        Lib:RefreshPage()
+    end
 end
 
 local COUNTER_BACKDROP = {
@@ -463,14 +537,15 @@ function ns:CreateCounter()
 
     local counter
     if BackdropTemplateMixin then
-        local ok, frame = pcall(CreateFrame, "Frame", "XiusKillStreak_CounterFrame", UIParent, "BackdropTemplate")
+        local ok, frame = pcall(CreateFrame, "Frame", nil, UIParent, "BackdropTemplate")
         if ok and frame then
             counter = frame
         end
     end
     if not counter then
-        counter = CreateFrame("Frame", "XiusKillStreak_CounterFrame", UIParent)
+        counter = CreateFrame("Frame", nil, UIParent)
     end
+    counter._protected = false
 
     counter:SetSize(DEFAULT_COUNTER_W, DEFAULT_COUNTER_H)
     counter:SetFrameStrata("MEDIUM")
@@ -638,6 +713,31 @@ function ns:SaveCounterSize()
     end
 end
 
+function ns:RegisterMovers()
+    if self.moversRegistered then
+        return
+    end
+    local core = _G.XiusCore
+    if not core or type(core.RegisterMover) ~= "function" then
+        return
+    end
+    if self.banner then
+        core:RegisterMover("killstreakBanner", self.banner, "Kill Streak Banner", function(unlocked)
+            if ns.SetUnlocked then
+                ns:SetUnlocked(unlocked and true or false)
+            end
+        end)
+    end
+    if self.counter then
+        core:RegisterMover("killstreakCounter", self.counter, "Kill Streak Counter", function(unlocked)
+            if ns.SetUnlocked then
+                ns:SetUnlocked(unlocked and true or false)
+            end
+        end)
+    end
+    self.moversRegistered = true
+end
+
 function ns:ResetPositions()
     if XiusKillStreakDB then
         XiusKillStreakDB.bannerPos = nil
@@ -647,13 +747,17 @@ function ns:ResetPositions()
     end
     self:ApplyBannerPosition()
     self:ApplyCounterPosition()
+    local Lib = _G.XiusCoreSettingsLib
+    if Lib and Lib.RefreshPage and Lib.frame and Lib.frame:IsShown() and Lib.page == "KillStreak" then
+        Lib:RefreshPage()
+    end
 end
 
 function ns:UpdateLock()
     local unlocked = XiusKillStreakDB and XiusKillStreakDB.unlocked and true or false
     local banner = self.banner
     local counter = self.counter
-    if ns.InLockdown() and ((banner and FrameProtected(banner)) or (counter and FrameProtected(counter))) then
+    if ns.InLockdown() and ((banner and banner._protected) or (counter and counter._protected)) then
         layoutQueued = true
         return
     end
